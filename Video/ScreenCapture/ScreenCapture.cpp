@@ -7,7 +7,7 @@
 #include "ScreenCapture.h"
 
 ScreenCapture::ScreenCapture(BScreen *screen)
-	: BDirectWindow(BRect(-1, -1, 0, 0), "FakeDirectWindow",
+	: BDirectWindow(BRect(-2, -2, -1, -1), "FakeDirectWindow",
 		B_NO_BORDER_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL,
 		B_AVOID_FRONT | B_AVOID_FOCUS | B_NO_WORKSPACE_ACTIVATION,
 		B_CURRENT_WORKSPACE)
