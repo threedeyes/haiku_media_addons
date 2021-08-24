@@ -20,6 +20,7 @@
 #include <iostream>
 
 #include "Producer.h"
+#include "Icons.h"
 
 VideoProducer::VideoProducer(
 		BMediaAddOn *addon, const char *name, int32 internal_id)

@@ -130,6 +130,8 @@ private:
 	bool				fRunning;
 	bool				fConnected;
 	bool				fEnabled;
+	
+	BBitmap				*fCameraIcon;
 
 /* thread */
 	thread_id			fThread;
