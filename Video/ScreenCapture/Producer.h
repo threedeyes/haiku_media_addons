@@ -134,7 +134,7 @@ private:
 /* settings */
 	status_t			OpenAddonSettings(BFile& file, uint32 mode);
 	status_t			LoadAddonSettings();
-	status_t			SaveAddonSettings();		
+	status_t			SaveAddonSettings();
 /* params */
 	enum				{
 							P_FPS,
