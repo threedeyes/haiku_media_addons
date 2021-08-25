@@ -134,8 +134,8 @@ private:
 	BBitmap				*fCameraIcon;
 
 /* thread */
-	thread_id			fThread;
-	thread_id			fThreadReader;
+	thread_id			fFrameGeneratorThread;
+	thread_id			fFFMEGReaderThread;
 	sem_id				fFrameSync;
 
 	int32				FrameGenerator();

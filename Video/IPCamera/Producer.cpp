@@ -32,7 +32,8 @@ VideoProducer::VideoProducer(
 	,fInternalID(internal_id)
 	,fAddOn(addon)
 	,fBufferGroup(NULL)
-	,fThread(-1)
+	,fFrameGeneratorThread(-1)
+	,fFFMEGReaderThread(-1)
 	,fFrameSync(-1)
 	,fProcessingLatency(0LL)
 	,fRunning(false)
@@ -529,16 +530,16 @@ VideoProducer::SetParameterValue(
 		case P_URL:
 		{
 			fURL.SetTo((const char *)value);
-			if (fThreadReader) {
+			if (fFFMEGReaderThread) {
 				fStreamConnected = false;
-				kill_thread(fThreadReader);
-				fThreadReader = 0;
+				kill_thread(fFFMEGReaderThread);
+				fFFMEGReaderThread = -1;
 			}
 	
-			fThreadReader = spawn_thread(_stream_reader_, "ffmpeg reader",
+			fFFMEGReaderThread = spawn_thread(_stream_reader_, "ffmpeg reader",
 				B_NORMAL_PRIORITY, (void*)this);
-			if (fThreadReader >= B_OK)
-				resume_thread(fThreadReader);
+			if (fFFMEGReaderThread >= B_OK)
+				resume_thread(fFFMEGReaderThread);
 	
 			break;
 		}
@@ -572,19 +573,19 @@ VideoProducer::HandleStart(bigtime_t performance_time)
 		goto err1;
 
 	fStreamConnected = false;
-	fThreadReader = spawn_thread(_stream_reader_, "ffmpeg reader",
+	fFFMEGReaderThread = spawn_thread(_stream_reader_, "ffmpeg reader",
 			B_NORMAL_PRIORITY, this);
-	if (fThreadReader < B_OK)
+	if (fFFMEGReaderThread < B_OK)
 		goto err2;
 
-	resume_thread(fThreadReader);
+	resume_thread(fFFMEGReaderThread);
 
-	fThread = spawn_thread(_frame_generator_, "frame generator",
+	fFrameGeneratorThread = spawn_thread(_frame_generator_, "frame generator",
 			B_NORMAL_PRIORITY, this);
-	if (fThread < B_OK)
+	if (fFrameGeneratorThread < B_OK)
 		goto err2;
 
-	resume_thread(fThread);
+	resume_thread(fFrameGeneratorThread);
 
 	fRunning = true;
 	return;
@@ -602,10 +603,10 @@ VideoProducer::HandleStop(void)
 		return;
 
 	delete_sem(fFrameSync);
-	wait_for_thread(fThread, &fThread);
+	wait_for_thread(fFrameGeneratorThread, &fFrameGeneratorThread);
 
 	fStreamConnected = false;
-	kill_thread(fThreadReader);
+	kill_thread(fFFMEGReaderThread);
 
 	fRunning = false;
 }
