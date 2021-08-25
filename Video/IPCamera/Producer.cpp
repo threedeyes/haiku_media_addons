@@ -768,8 +768,11 @@ VideoProducer::FrameGenerator()
 			}
 		} else {
 			bigtime_t now = system_time();
-			if (fReconnectTime > 0 && now > fDisconnectTime + fReconnectTime * 1000000)
-				StreamReaderControl(S_RESTART);
+			if (fReconnectTime > 0 &&
+				fDisconnectTime > 0 &&
+				now > fDisconnectTime + fReconnectTime * 1000000) {
+				StreamReaderControl(S_START);
+			}
 
 			int bufferSize = (int)fConnectedFormat.display.line_width *
 				(int)fConnectedFormat.display.line_count * sizeof(uint32);
@@ -871,6 +874,8 @@ VideoProducer::StreamReader()
 	img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
 		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count,
 		AV_PIX_FMT_BGR0, SWS_BICUBIC, NULL, NULL, NULL);
+
+	fDisconnectTime = 0;
 
 	while (av_read_frame(pFormatCtx, packet) >= 0 && !fStreamReaderQuitRequested) {
 		if (packet->stream_index == videoindex) {
