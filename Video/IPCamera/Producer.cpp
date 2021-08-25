@@ -40,6 +40,7 @@ VideoProducer::VideoProducer(
 	,fConnected(false)
 	,fEnabled(false)
 	,fStreamConnected(false)
+	,fStreamReaderQuitRequested(false)
 	,fURL("rtsp://")
 	,fReconnectTime(0)
 	,fKeepAspect(1)
@@ -537,7 +538,7 @@ VideoProducer::SetParameterValue(
 		case P_URL:
 		{
 			fURL.SetTo((const char *)value);
-			StreamReaderRestart();
+			StreamReaderControl(S_RESTART);
 			break;
 		}
 	}
@@ -570,7 +571,7 @@ VideoProducer::HandleStart(bigtime_t performance_time)
 		goto err1;
 
 	fStreamConnected = false;
-	if (!StreamReaderRestart())
+	if (!StreamReaderControl(S_START))
 		goto err2;
 
 	fFrameGeneratorThread = spawn_thread(_frame_generator_, "frame generator",
@@ -601,9 +602,7 @@ VideoProducer::HandleStop(void)
 	wait_for_thread(fFrameGeneratorThread, &retval);
 	fFrameGeneratorThread = -1;
 
-	fStreamConnected = false;
-	wait_for_thread(fFFMEGReaderThread, &retval);
-	fFFMEGReaderThread = -1;
+	StreamReaderControl(S_STOP);
 
 	fRunning = false;
 }
@@ -880,9 +879,7 @@ VideoProducer::StreamReader()
 		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count,
 		AV_PIX_FMT_BGR0, SWS_BICUBIC, NULL, NULL, NULL);
 
-	fStreamConnected = true;
-
-	while (av_read_frame(pFormatCtx, packet) >= 0 && fStreamConnected) {
+	while (av_read_frame(pFormatCtx, packet) >= 0 && !fStreamReaderQuitRequested) {
 		if (packet->stream_index == videoindex) {
 			
 			ret = avcodec_decode_video2(pCodecCtx, pFrame, &got_picture, packet);
@@ -905,7 +902,8 @@ VideoProducer::StreamReader()
 			if (got_picture) {
 				sws_scale(img_convert_ctx, (const uint8_t* const*)pFrame->data,
 					pFrame->linesize, 0, pCodecCtx->height,
-					pFrameRGB->data, pFrameRGB->linesize);				
+					pFrameRGB->data, pFrameRGB->linesize);
+				fStreamConnected = true;
 				//snooze(delay);
 			}
 		}
@@ -930,21 +928,47 @@ VideoProducer::_stream_reader_(void *data)
 }
 
 bool
-VideoProducer::StreamReaderRestart()
+VideoProducer::StreamReaderControl(uint32 state)
 {
-	if (fFFMEGReaderThread > 0) {
-		fStreamConnected = false;
-		status_t retval;
-		wait_for_thread(fFFMEGReaderThread, &retval);
-		fFFMEGReaderThread = -1;
-	}
+	bool result = false;
+	switch (state) {
+		case S_START:
+		{
+			thread_info info;
+			if (fFFMEGReaderThread >= B_OK && get_thread_info(fFFMEGReaderThread, &info) == B_OK)
+				break;
 
-	fFFMEGReaderThread = spawn_thread(_stream_reader_, "ffmpeg reader",
-		B_NORMAL_PRIORITY, (void*)this);
-	if (fFFMEGReaderThread >= B_OK) {
-		resume_thread(fFFMEGReaderThread);
-		return true;
-	}
+			fStreamReaderQuitRequested = false;
 
-	return false;
+			fFFMEGReaderThread = spawn_thread(_stream_reader_, "ffmpeg reader",
+				B_NORMAL_PRIORITY, (void*)this);
+			if (fFFMEGReaderThread >= B_OK) {
+				resume_thread(fFFMEGReaderThread);
+				result = true;
+			}
+			break;
+		}
+		case S_STOP:
+		{
+			thread_info info;
+			if (fFFMEGReaderThread >= B_OK && get_thread_info(fFFMEGReaderThread, &info) == B_OK) {
+				status_t retval;
+				fStreamReaderQuitRequested = true;
+				wait_for_thread(fFFMEGReaderThread, &retval);
+				fFFMEGReaderThread = -1;
+				fStreamConnected = false;
+			}
+			result = true;
+			break;
+		}
+		case S_RESTART:
+		{
+			StreamReaderControl(S_STOP);
+			result = StreamReaderControl(S_START);
+			break;
+		}
+		default:
+			break;
+	}
+	return result;
 }

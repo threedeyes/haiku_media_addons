@@ -29,7 +29,6 @@ extern "C"
 	#include "libswscale/swscale.h"
 };
 
-
 class VideoProducer :
 	public virtual BMediaEventLooper,
 	public virtual BBufferProducer,
@@ -142,13 +141,21 @@ private:
 	thread_id			fFFMEGReaderThread;
 	sem_id				fFrameSync;
 
+	bool				fStreamReaderQuitRequested;
+
 	int32				FrameGenerator();
 	static int32		_frame_generator_(void *data);
 
 	int32				StreamReader();
 	static int32		_stream_reader_(void *data);
-	
-	bool				StreamReaderRestart();
+
+	enum				{
+							S_START,
+							S_STOP,
+							S_RESTART
+						};
+
+	bool				StreamReaderControl(uint32 state);
 
 /* settings */
 	status_t			OpenAddonSettings(BFile& file, uint32 mode);
