@@ -947,6 +947,7 @@ VideoProducer::StreamReaderControl(uint32 state)
 				fStreamReaderQuitRequested = true;
 				wait_for_thread(fFFMEGReaderThread, &retval);
 				fFFMEGReaderThread = -1;
+				fDisconnectTime = system_time();
 				fStreamConnected = false;
 			}
 			result = true;
