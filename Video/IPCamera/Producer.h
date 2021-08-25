@@ -140,6 +140,7 @@ private:
 	thread_id			fFrameGeneratorThread;
 	thread_id			fFFMEGReaderThread;
 	sem_id				fFrameSync;
+	bigtime_t			fDisconnectTime;
 
 	bool				fStreamReaderQuitRequested;
 

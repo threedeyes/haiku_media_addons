@@ -39,6 +39,7 @@ VideoProducer::VideoProducer(
 	,fEnabled(false)
 	,fStreamConnected(false)
 	,fStreamReaderQuitRequested(false)
+	,fDisconnectTime(0)
 	,fURL("rtsp://")
 	,fReconnectTime(0)
 	,fKeepAspect(1)
@@ -126,7 +127,6 @@ VideoProducer::NodeRegistered()
 	BDiscreteParameter *reconnect = network_group->MakeDiscreteParameter(
 		P_RECONNECT, B_MEDIA_RAW_VIDEO, "Auto reconnect to network stream:", B_GENERIC);
 	reconnect->AddItem(0, "Disabled");
-	reconnect->AddItem(1, "1 sec.");
 	reconnect->AddItem(5, "5 sec.");
 	reconnect->AddItem(15, "15 sec.");
 	reconnect->AddItem(60, "1 min.");
@@ -767,6 +767,10 @@ VideoProducer::FrameGenerator()
 				}
 			}
 		} else {
+			bigtime_t now = system_time();
+			if (fReconnectTime > 0 && now > fDisconnectTime + fReconnectTime * 1000000)
+				StreamReaderControl(S_RESTART);
+
 			int bufferSize = (int)fConnectedFormat.display.line_width *
 				(int)fConnectedFormat.display.line_count * sizeof(uint32);
 
@@ -896,6 +900,7 @@ VideoProducer::StreamReader()
 		av_free_packet(packet);
 	}
 	fStreamConnected = false;
+	fDisconnectTime = system_time();
 
 	sws_freeContext(img_convert_ctx);
 
