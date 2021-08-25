@@ -873,7 +873,7 @@ VideoProducer::StreamReader()
 
 	img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
 		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count,
-		AV_PIX_FMT_BGR0, SWS_BICUBIC, NULL, NULL, NULL);
+		AV_PIX_FMT_BGR0, SWS_FAST_BILINEAR, NULL, NULL, NULL);
 
 	fDisconnectTime = 0;
 
@@ -890,7 +890,7 @@ VideoProducer::StreamReader()
 
 			brightness = ((int(fBrightness) << 16) + 50) / 100;
 			contrast = (((int(fContrast) + 100) << 16) + 50) / 100;
-			saturation = (((int(fSaturation)+100) << 16) + 50) / 100;
+			saturation = (((int(fSaturation) + 100) << 16) + 50) / 100;
 			sws_setColorspaceDetails(img_convert_ctx, inv_table, srcRange, table,
 				dstRange, brightness, contrast, saturation);
 
