@@ -770,28 +770,31 @@ VideoProducer::FrameGenerator()
 				}
 			}
 		} else {
-			if (fCameraIcon != NULL) {
+			int bufferSize = (int)fConnectedFormat.display.line_width *
+				(int)fConnectedFormat.display.line_count * sizeof(uint32);
+
+			memset(buffer->Data(), 0, bufferSize);
+
+			if (fCameraIcon != NULL && fLEDIcon != NULL) {
 				int inverse = (fFrame / 15) % 2;
 
 				BPoint cameraPosition((fConnectedFormat.display.line_width - fCameraIcon->Bounds().IntegerWidth()) / 2,
 					(fConnectedFormat.display.line_count - fCameraIcon->Bounds().IntegerHeight()) / 2);
 				BPoint ledPosition = BPoint(0, 0);
 
-				memset(buffer->Data(), 0, buffer->Size());
-
-				BPrivate::ConvertBits(fCameraIcon->Bits(), buffer->Data(), fCameraIcon->BitsLength(), buffer->Size(),
+				BPrivate::ConvertBits(fCameraIcon->Bits(), buffer->Data(), fCameraIcon->BitsLength(), bufferSize,
 					fCameraIcon->BytesPerRow(), (int)fConnectedFormat.display.line_width * sizeof(uint32),
 					B_RGBA32, B_RGB32, BPoint(0, 0), cameraPosition,
 					fCameraIcon->Bounds().IntegerWidth(), fCameraIcon->Bounds().IntegerHeight());
 				if (inverse) {
-					BPrivate::ConvertBits(fLEDIcon->Bits(), buffer->Data(), fLEDIcon->BitsLength(), buffer->Size(),
+					BPrivate::ConvertBits(fLEDIcon->Bits(), buffer->Data(), fLEDIcon->BitsLength(), bufferSize,
 						fLEDIcon->BytesPerRow(), (int)fConnectedFormat.display.line_width * sizeof(uint32),
 						B_RGBA32, B_RGB32, BPoint(0, 0), ledPosition,
 						fLEDIcon->Bounds().IntegerWidth(), fLEDIcon->Bounds().IntegerHeight());
 				}
 			}
 		}
-		
+
 		if (SendBuffer(buffer, fOutput.source, fOutput.destination) < B_OK)
 			buffer->Recycle();
 	}
