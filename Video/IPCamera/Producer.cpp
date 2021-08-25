@@ -811,38 +811,29 @@ VideoProducer::StreamReader()
 	int y_size;
 	int ret, got_picture;
 	struct SwsContext *img_convert_ctx;
-	int frame_cnt;
 	
-	int frame_w = 640;
-	int frame_h = 480;
-
 	av_register_all();
 	avformat_network_init();
 	pFormatCtx = avformat_alloc_context();
 
-	if (avformat_open_input(&pFormatCtx, fURL.String(), NULL, NULL) != 0)
-	{
+	if (avformat_open_input(&pFormatCtx, fURL.String(), NULL, NULL) != 0) {
 		std::cout << "Can't open input stream." << std::endl;
 		return -1;
 	}
 
-	if (avformat_find_stream_info(pFormatCtx, NULL) < 0)
-	{
-		std::cout << "Can't find stram information." << std::endl;
+	if (avformat_find_stream_info(pFormatCtx, NULL) < 0) {
+		std::cout << "Can't find stream information." << std::endl;
 		return -1;
 	}
 
 	videoindex = -1;
-	for (int i = 0; i < pFormatCtx->nb_streams; i++)
-	{
-		if (pFormatCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO)
-		{
+	for (int i = 0; i < pFormatCtx->nb_streams; i++) {
+		if (pFormatCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
 			videoindex = i;
 			break;
 		}
 	}
-	if (videoindex == -1)
-	{
+	if (videoindex == -1) {
 		std::cout << "Can't find a video stream." << std::endl;
 		avformat_close_input(&pFormatCtx);
 		return -1;
@@ -850,15 +841,13 @@ VideoProducer::StreamReader()
 
 	pCodecCtx = pFormatCtx->streams[videoindex]->codec;
 	pCodec = avcodec_find_decoder(pCodecCtx->codec_id);
-	if (pCodec == NULL)
-	{
+	if (pCodec == NULL) {
 		std::cout << "Can't find Codec." << std::endl;
 		avformat_close_input(&pFormatCtx);
 		return -1;
 	}
 
-	if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0)
-	{
+	if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0)	{
 		std::cout << "Can't open the selected Codec." << std::endl;
 		return -1;
 	}
@@ -871,15 +860,16 @@ VideoProducer::StreamReader()
 	pFrame = av_frame_alloc();
 	pFrameRGB = av_frame_alloc();
 
-	out_buffer = (uint8_t *)av_malloc(avpicture_get_size(AV_PIX_FMT_BGR0, frame_w, frame_h));
-	avpicture_fill((AVPicture *)pFrameRGB, out_buffer, AV_PIX_FMT_BGR0, frame_w, frame_h);
+	out_buffer = (uint8_t *)av_malloc(avpicture_get_size(AV_PIX_FMT_BGR0,
+		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count));
+	avpicture_fill((AVPicture *)pFrameRGB, out_buffer, AV_PIX_FMT_BGR0,
+		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count);
 	packet = (AVPacket *)av_malloc(sizeof(AVPacket));
 
 	img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
-		frame_w, frame_h, AV_PIX_FMT_BGR0, SWS_BICUBIC, NULL, NULL, NULL);
+		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count,
+		AV_PIX_FMT_BGR0, SWS_BICUBIC, NULL, NULL, NULL);
 
-	frame_cnt = 0;
-		
 	while (av_read_frame(pFormatCtx, packet) >= 0) {
 		if (packet->stream_index == videoindex) {
 			
@@ -892,19 +882,18 @@ VideoProducer::StreamReader()
 			int *table;
 			int *inv_table;
 			int brightness, contrast, saturation, srcRange, dstRange;
-			sws_getColorspaceDetails(img_convert_ctx, &inv_table, &srcRange, &table, &dstRange, &brightness, &contrast, &saturation);
-			int br = fBrightness;
-			int co = fContrast;
-			int sa = fSaturation;
-			brightness = ((br<<16) + 50) / 100;
-			contrast = (((co+100)<<16) + 50) / 100;
-			saturation = (((sa+100)<<16) + 50) / 100;
-			sws_setColorspaceDetails(img_convert_ctx, inv_table, srcRange, table, dstRange, brightness, contrast, saturation);
-			
+			sws_getColorspaceDetails(img_convert_ctx, &inv_table, &srcRange, &table,
+				&dstRange, &brightness, &contrast, &saturation);
+			brightness = ((int(fBrightness) << 16) + 50) / 100;
+			contrast = (((int(fContrast) + 100) << 16) + 50) / 100;
+			saturation = (((int(fSaturation)+100) << 16) + 50) / 100;
+			sws_setColorspaceDetails(img_convert_ctx, inv_table, srcRange, table,
+				dstRange, brightness, contrast, saturation);
+
 			if (got_picture) {
-				sws_scale(img_convert_ctx, (const uint8_t* const*)pFrame->data, pFrame->linesize, 0, pCodecCtx->height,
+				sws_scale(img_convert_ctx, (const uint8_t* const*)pFrame->data,
+					pFrame->linesize, 0, pCodecCtx->height,
 					pFrameRGB->data, pFrameRGB->linesize);
-				frame_cnt++;
 				fStreamConnected = true;
 				//snooze(delay);
 			}
