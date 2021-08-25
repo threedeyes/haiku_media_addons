@@ -17,8 +17,6 @@
 
 #include <Autolock.h>
 
-#include <iostream>
-
 #include "Producer.h"
 #include "Icons.h"
 
@@ -825,15 +823,11 @@ VideoProducer::StreamReader()
 	avformat_network_init();
 	pFormatCtx = avformat_alloc_context();
 
-	if (avformat_open_input(&pFormatCtx, fURL.String(), NULL, NULL) != 0) {
-		std::cout << "Can't open input stream." << std::endl;
+	if (avformat_open_input(&pFormatCtx, fURL.String(), NULL, NULL) != 0)
 		return -1;
-	}
 
-	if (avformat_find_stream_info(pFormatCtx, NULL) < 0) {
-		std::cout << "Can't find stream information." << std::endl;
+	if (avformat_find_stream_info(pFormatCtx, NULL) < 0)
 		return -1;
-	}
 
 	videoindex = -1;
 	for (int i = 0; i < pFormatCtx->nb_streams; i++) {
@@ -843,7 +837,6 @@ VideoProducer::StreamReader()
 		}
 	}
 	if (videoindex == -1) {
-		std::cout << "Can't find a video stream." << std::endl;
 		avformat_close_input(&pFormatCtx);
 		return -1;
 	}
@@ -851,17 +844,13 @@ VideoProducer::StreamReader()
 	pCodecCtx = pFormatCtx->streams[videoindex]->codec;
 	pCodec = avcodec_find_decoder(pCodecCtx->codec_id);
 	if (pCodec == NULL) {
-		std::cout << "Can't find Codec." << std::endl;
 		avformat_close_input(&pFormatCtx);
 		return -1;
 	}
 
-	if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0)	{
-		std::cout << "Can't open the selected Codec." << std::endl;
+	if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0)
 		return -1;
-	}
 	
-	std::cout << "Time of this video: " << pFormatCtx->duration << " us." << std::endl;
 	double num = pFormatCtx->streams[videoindex]->r_frame_rate.num;
 	double den = pFormatCtx->streams[videoindex]->r_frame_rate.den;
 	double delay = 1000000 / (num / den);
@@ -881,18 +870,15 @@ VideoProducer::StreamReader()
 
 	while (av_read_frame(pFormatCtx, packet) >= 0 && !fStreamReaderQuitRequested) {
 		if (packet->stream_index == videoindex) {
-			
-			ret = avcodec_decode_video2(pCodecCtx, pFrame, &got_picture, packet);
-			if (ret < 0) {
-				std::cout << "Decode Error." << std::endl;
-				return -1;
-			}
-			
+			if (avcodec_decode_video2(pCodecCtx, pFrame, &got_picture, packet) < 0)
+				break;
+
 			int *table;
 			int *inv_table;
 			int brightness, contrast, saturation, srcRange, dstRange;
 			sws_getColorspaceDetails(img_convert_ctx, &inv_table, &srcRange, &table,
 				&dstRange, &brightness, &contrast, &saturation);
+
 			brightness = ((int(fBrightness) << 16) + 50) / 100;
 			contrast = (((int(fContrast) + 100) << 16) + 50) / 100;
 			saturation = (((int(fSaturation)+100) << 16) + 50) / 100;
