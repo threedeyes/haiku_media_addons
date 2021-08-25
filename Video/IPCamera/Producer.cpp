@@ -530,17 +530,7 @@ VideoProducer::SetParameterValue(
 		case P_URL:
 		{
 			fURL.SetTo((const char *)value);
-			if (fFFMEGReaderThread) {
-				fStreamConnected = false;
-				kill_thread(fFFMEGReaderThread);
-				fFFMEGReaderThread = -1;
-			}
-	
-			fFFMEGReaderThread = spawn_thread(_stream_reader_, "ffmpeg reader",
-				B_NORMAL_PRIORITY, (void*)this);
-			if (fFFMEGReaderThread >= B_OK)
-				resume_thread(fFFMEGReaderThread);
-	
+			StreamReaderRestart();
 			break;
 		}
 	}
@@ -573,12 +563,8 @@ VideoProducer::HandleStart(bigtime_t performance_time)
 		goto err1;
 
 	fStreamConnected = false;
-	fFFMEGReaderThread = spawn_thread(_stream_reader_, "ffmpeg reader",
-			B_NORMAL_PRIORITY, this);
-	if (fFFMEGReaderThread < B_OK)
+	if (!StreamReaderRestart())
 		goto err2;
-
-	resume_thread(fFFMEGReaderThread);
 
 	fFrameGeneratorThread = spawn_thread(_frame_generator_, "frame generator",
 			B_NORMAL_PRIORITY, this);
@@ -602,11 +588,15 @@ VideoProducer::HandleStop(void)
 	if (!fRunning)
 		return;
 
+	status_t retval;
+
 	delete_sem(fFrameSync);
-	wait_for_thread(fFrameGeneratorThread, &fFrameGeneratorThread);
+	wait_for_thread(fFrameGeneratorThread, &retval);
+	fFrameGeneratorThread = -1;
 
 	fStreamConnected = false;
-	kill_thread(fFFMEGReaderThread);
+	wait_for_thread(fFFMEGReaderThread, &retval);
+	fFFMEGReaderThread = -1;
 
 	fRunning = false;
 }
@@ -871,7 +861,9 @@ VideoProducer::StreamReader()
 		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count,
 		AV_PIX_FMT_BGR0, SWS_BICUBIC, NULL, NULL, NULL);
 
-	while (av_read_frame(pFormatCtx, packet) >= 0) {
+	fStreamConnected = true;
+
+	while (av_read_frame(pFormatCtx, packet) >= 0 && fStreamConnected) {
 		if (packet->stream_index == videoindex) {
 			
 			ret = avcodec_decode_video2(pCodecCtx, pFrame, &got_picture, packet);
@@ -894,8 +886,7 @@ VideoProducer::StreamReader()
 			if (got_picture) {
 				sws_scale(img_convert_ctx, (const uint8_t* const*)pFrame->data,
 					pFrame->linesize, 0, pCodecCtx->height,
-					pFrameRGB->data, pFrameRGB->linesize);
-				fStreamConnected = true;
+					pFrameRGB->data, pFrameRGB->linesize);				
 				//snooze(delay);
 			}
 		}
@@ -917,4 +908,24 @@ int32
 VideoProducer::_stream_reader_(void *data)
 {
 	return ((VideoProducer *)data)->StreamReader();
+}
+
+bool
+VideoProducer::StreamReaderRestart()
+{
+	if (fFFMEGReaderThread > 0) {
+		fStreamConnected = false;
+		status_t retval;
+		wait_for_thread(fFFMEGReaderThread, &retval);
+		fFFMEGReaderThread = -1;
+	}
+
+	fFFMEGReaderThread = spawn_thread(_stream_reader_, "ffmpeg reader",
+		B_NORMAL_PRIORITY, (void*)this);
+	if (fFFMEGReaderThread >= B_OK) {
+		resume_thread(fFFMEGReaderThread);
+		return true;
+	}
+
+	return false;
 }

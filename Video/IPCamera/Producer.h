@@ -143,6 +143,8 @@ private:
 
 	int32				StreamReader();
 	static int32		_stream_reader_(void *data);
+	
+	bool				StreamReaderRestart();
 
 /* settings */
 	status_t			OpenAddonSettings(BFile& file, uint32 mode);
