@@ -17,7 +17,10 @@
 
 #include <String.h>
 #include <StorageKit.h>
+#include <Bitmap.h>
+#include <IconUtils.h>
 #include <support/Locker.h>
+#include <private/interface/ColorConversion.h>
 
 extern "C"
 {
@@ -132,6 +135,7 @@ private:
 	bool				fEnabled;
 	
 	BBitmap				*fCameraIcon;
+	BBitmap				*fLEDIcon;
 
 /* thread */
 	thread_id			fFrameGeneratorThread;

@@ -52,6 +52,10 @@ VideoProducer::VideoProducer(
 {
 	fOutput.destination = media_destination::null;
 	LoadAddonSettings();
+	fCameraIcon = new BBitmap(BRect(0, 0, 255, 255), B_RGB32);
+	BIconUtils::GetVectorIcon(kWebCameraIcon, sizeof(kWebCameraIcon), fCameraIcon);
+	fLEDIcon = new BBitmap(BRect(0, 0, 64, 64), B_RGB32);
+	BIconUtils::GetVectorIcon(kLEDIcon, sizeof(kLEDIcon), fLEDIcon);
 	fInitStatus = B_OK;
 	return;
 }
@@ -66,6 +70,9 @@ VideoProducer::~VideoProducer()
 		if (fRunning)
 			HandleStop();
 	}
+
+	delete fCameraIcon;
+	delete fLEDIcon;
 }
 
 /* BMediaNode */
@@ -763,17 +770,26 @@ VideoProducer::FrameGenerator()
 				}
 			}
 		} else {
-			uint32 *p = (uint32 *)buffer->Data();
-			for (int y = 0; y < (int)fConnectedFormat.display.line_count; y++)
-				for (int x = 0; x < (int)fConnectedFormat.display.line_width; x++) {
-					int inverse = (fFrame / 15) % 2;
-					int xn = x  / 48;
-					int yn = y  / 48;
-					if ((xn + yn + inverse) % 2 == 0)
-						*(p++) = 0xff222222;
-					else
-						*(p++) = 0xff555555;
+			if (fCameraIcon != NULL) {
+				int inverse = (fFrame / 15) % 2;
+
+				BPoint cameraPosition((fConnectedFormat.display.line_width - fCameraIcon->Bounds().IntegerWidth()) / 2,
+					(fConnectedFormat.display.line_count - fCameraIcon->Bounds().IntegerHeight()) / 2);
+				BPoint ledPosition = BPoint(0, 0);
+
+				memset(buffer->Data(), 0, buffer->Size());
+
+				BPrivate::ConvertBits(fCameraIcon->Bits(), buffer->Data(), fCameraIcon->BitsLength(), buffer->Size(),
+					fCameraIcon->BytesPerRow(), (int)fConnectedFormat.display.line_width * sizeof(uint32),
+					B_RGBA32, B_RGB32, BPoint(0, 0), cameraPosition,
+					fCameraIcon->Bounds().IntegerWidth(), fCameraIcon->Bounds().IntegerHeight());
+				if (inverse) {
+					BPrivate::ConvertBits(fLEDIcon->Bits(), buffer->Data(), fLEDIcon->BitsLength(), buffer->Size(),
+						fLEDIcon->BytesPerRow(), (int)fConnectedFormat.display.line_width * sizeof(uint32),
+						B_RGBA32, B_RGB32, BPoint(0, 0), ledPosition,
+						fLEDIcon->Bounds().IntegerWidth(), fLEDIcon->Bounds().IntegerHeight());
 				}
+			}
 		}
 		
 		if (SendBuffer(buffer, fOutput.source, fOutput.destination) < B_OK)
