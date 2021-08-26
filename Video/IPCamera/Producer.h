@@ -197,6 +197,7 @@ private:
 
 /* ffmeg */
 	AVFrame				*pFrameRGB;
+	AVFrame				*pFrameRGBFixed;
 	bool				fStreamConnected;
 };
 

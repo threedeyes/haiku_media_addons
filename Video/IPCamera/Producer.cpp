@@ -743,28 +743,43 @@ VideoProducer::FrameGenerator()
 		h->u.raw_video.line_count = fConnectedFormat.display.line_count;
 
 		if (fStreamConnected) {
-			if (!fFlipVertical && !fFlipHorizontal) {
+			if (fKeepAspect) {
+				memset((unsigned char*)buffer->Data(), 0, buffer->Size());
+				BPoint framePos(0, 0);
+				if (pFrameRGBFixed->width == (int)fConnectedFormat.display.line_width)
+					framePos.Set(0, (fConnectedFormat.display.line_count - pFrameRGBFixed->height) /2);
+				if (pFrameRGBFixed->height == (int)fConnectedFormat.display.line_count)
+					framePos.Set((fConnectedFormat.display.line_width - pFrameRGBFixed->width) /2, 0);
+				BPrivate::ConvertBits(pFrameRGBFixed->data[0], buffer->Data(),
+					pFrameRGBFixed->width * pFrameRGBFixed->height * sizeof(uint32), buffer->Size(),
+					pFrameRGBFixed->width * sizeof(uint32), (int)fConnectedFormat.display.line_width * sizeof(uint32),
+					B_RGBA32, B_RGB32, BPoint(0, 0), framePos,
+					pFrameRGBFixed->width, pFrameRGBFixed->height);
+			} else {
 				memcpy((unsigned char*)buffer->Data(),
 					(unsigned char*)pFrameRGB->data[0], buffer->Size());
-			}else {
-				uint32 *dst = (uint32 *)buffer->Data();
-				uint32 *src = (uint32 *)pFrameRGB->data[0];
-				if (fFlipVertical) {
-					src+= ((int)fConnectedFormat.display.line_count - 1) *
-						(int)fConnectedFormat.display.line_width;
-				}
-
-				for (int y = 0; y < (int)fConnectedFormat.display.line_count; y++) {
-					if (fFlipHorizontal) {
-						for(int x = 0; x < (int)fConnectedFormat.display.line_width; x++)
-							dst[x] = src[((int)fConnectedFormat.display.line_width - 1) - x];
-					} else
-						memcpy((unsigned char*)dst, (unsigned char*)src,
-							(int)fConnectedFormat.display.line_width * 4);
-
-					dst += (int)fConnectedFormat.display.line_width;
-					src += (fFlipVertical ? -1 : 1) * (int)fConnectedFormat.display.line_width;
-				}
+			}
+			if (fFlipHorizontal) {
+				uint32 *bufferPtr = (uint32*)buffer->Data();
+				uint32 bufferWidth = fConnectedFormat.display.line_width;
+				uint32 bufferHeight = fConnectedFormat.display.line_count;
+				for(int y = 0; y < bufferHeight; y++)
+					for(int x = 0; x < bufferWidth / 2; x++) {
+						uint32 temp = bufferPtr[y * bufferWidth + x];
+						bufferPtr[y * bufferWidth + x] = bufferPtr[y * bufferWidth + (bufferWidth - x)];
+						bufferPtr[y * bufferWidth + (bufferWidth - x)] = temp;
+					}
+			}
+			if (fFlipVertical) {
+				uint32 *bufferPtr = (uint32*)buffer->Data();
+				uint32 bufferWidth = fConnectedFormat.display.line_width;
+				uint32 bufferHeight = fConnectedFormat.display.line_count;
+				for(int y = 0; y < bufferHeight / 2; y++)
+					for(int x = 0; x < bufferWidth; x++) {
+						uint32 temp = bufferPtr[y * bufferWidth + x];
+						bufferPtr[y * bufferWidth + x] = bufferPtr[(bufferHeight - y) * bufferWidth + x];
+						bufferPtr[(bufferHeight - y) * bufferWidth + x] = temp;
+					}
 			}
 		} else {
 			bigtime_t now = system_time();
@@ -821,10 +836,11 @@ VideoProducer::StreamReader()
 	AVFrame	*pFrame;
 	AVPacket *packet;
 	uint8_t *out_buffer;
+	uint8_t *out_buffer_fixed;
 	int	videoindex;
-	int y_size;
 	int ret, got_picture;
-	struct SwsContext *img_convert_ctx;
+	SwsContext *img_convert_ctx;
+	SwsContext *img_convert_ctx_fixed;
 	
 	av_register_all();
 	avformat_network_init();
@@ -864,15 +880,39 @@ VideoProducer::StreamReader()
 
 	pFrame = av_frame_alloc();
 	pFrameRGB = av_frame_alloc();
+	pFrameRGBFixed = av_frame_alloc();
 
 	out_buffer = (uint8_t *)av_malloc(avpicture_get_size(AV_PIX_FMT_BGR0,
 		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count));
 	avpicture_fill((AVPicture *)pFrameRGB, out_buffer, AV_PIX_FMT_BGR0,
 		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count);
+
+	double dx = (double)fConnectedFormat.display.line_width / (double)pCodecCtx->width;
+	double dy = (double)fConnectedFormat.display.line_count / (double)pCodecCtx->height;
+	double fixedWidth, fixedHeight;
+	if (dx < dy) {
+		fixedWidth = fConnectedFormat.display.line_width;
+		fixedHeight = (double)pCodecCtx->height * dx;
+	} else {
+		fixedWidth = (double)pCodecCtx->width * dy;
+		fixedHeight = fConnectedFormat.display.line_count;
+	}
+
+	pFrameRGBFixed->width = (int)fixedWidth;
+	pFrameRGBFixed->height = (int)fixedHeight;
+	out_buffer_fixed = (uint8_t *)av_malloc(avpicture_get_size(AV_PIX_FMT_BGR0,
+		(int)fixedWidth, (int)fixedHeight));
+	avpicture_fill((AVPicture *)pFrameRGBFixed, out_buffer_fixed, AV_PIX_FMT_BGR0,
+		(int)fixedWidth, (int)fixedHeight);
+
 	packet = (AVPacket *)av_malloc(sizeof(AVPacket));
 
 	img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
 		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count,
+		AV_PIX_FMT_BGR0, SWS_FAST_BILINEAR, NULL, NULL, NULL);
+
+	img_convert_ctx_fixed = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
+		(int)fixedWidth, (int)fixedHeight,
 		AV_PIX_FMT_BGR0, SWS_FAST_BILINEAR, NULL, NULL, NULL);
 
 	fDisconnectTime = 0;
@@ -882,22 +922,30 @@ VideoProducer::StreamReader()
 			if (avcodec_decode_video2(pCodecCtx, pFrame, &got_picture, packet) < 0)
 				break;
 
+			SwsContext *imgConvertCtx = fKeepAspect ? img_convert_ctx_fixed : img_convert_ctx;
+
 			int *table;
 			int *inv_table;
 			int brightness, contrast, saturation, srcRange, dstRange;
-			sws_getColorspaceDetails(img_convert_ctx, &inv_table, &srcRange, &table,
+			sws_getColorspaceDetails(imgConvertCtx, &inv_table, &srcRange, &table,
 				&dstRange, &brightness, &contrast, &saturation);
 
 			brightness = ((int(fBrightness) << 16) + 50) / 100;
 			contrast = (((int(fContrast) + 100) << 16) + 50) / 100;
 			saturation = (((int(fSaturation) + 100) << 16) + 50) / 100;
-			sws_setColorspaceDetails(img_convert_ctx, inv_table, srcRange, table,
+			sws_setColorspaceDetails(imgConvertCtx, inv_table, srcRange, table,
 				dstRange, brightness, contrast, saturation);
 
 			if (got_picture) {
-				sws_scale(img_convert_ctx, (const uint8_t* const*)pFrame->data,
-					pFrame->linesize, 0, pCodecCtx->height,
-					pFrameRGB->data, pFrameRGB->linesize);
+				if (imgConvertCtx == img_convert_ctx) {
+					sws_scale(imgConvertCtx, (const uint8_t* const*)pFrame->data,
+						pFrame->linesize, 0, pCodecCtx->height,
+						pFrameRGB->data, pFrameRGB->linesize);
+				} else {
+					sws_scale(imgConvertCtx, (const uint8_t* const*)pFrame->data,
+						pFrame->linesize, 0, pCodecCtx->height,
+						pFrameRGBFixed->data, pFrameRGBFixed->linesize);
+				}
 				fStreamConnected = true;
 				//snooze(delay);
 			}
@@ -908,7 +956,9 @@ VideoProducer::StreamReader()
 	fDisconnectTime = system_time();
 
 	sws_freeContext(img_convert_ctx);
+	sws_freeContext(img_convert_ctx_fixed);
 
+	av_frame_free(&pFrameRGBFixed);
 	av_frame_free(&pFrameRGB);
 	av_frame_free(&pFrame);
 	avcodec_close(pCodecCtx);
