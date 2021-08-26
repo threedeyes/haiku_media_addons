@@ -54,7 +54,7 @@ VideoProducer::VideoProducer(
 	LoadAddonSettings();
 	fCameraIcon = new BBitmap(BRect(0, 0, 255, 255), B_RGB32);
 	BIconUtils::GetVectorIcon(kWebCameraIcon, sizeof(kWebCameraIcon), fCameraIcon);
-	fLEDIcon = new BBitmap(BRect(0, 0, 64, 64), B_RGB32);
+	fLEDIcon = new BBitmap(BRect(0, 0, 63, 63), B_RGB32);
 	BIconUtils::GetVectorIcon(kLEDIcon, sizeof(kLEDIcon), fLEDIcon);
 	fInitStatus = B_OK;
 	return;
@@ -801,8 +801,6 @@ VideoProducer::FrameGenerator()
 
 				BPoint cameraPosition((fConnectedFormat.display.line_width - fCameraIcon->Bounds().IntegerWidth()) / 2,
 					(fConnectedFormat.display.line_count - fCameraIcon->Bounds().IntegerHeight()) / 2);
-				BPoint ledPosition = BPoint(0, 0);
-
 				BPrivate::ConvertBits(fCameraIcon->Bits(), buffer->Data(), fCameraIcon->BitsLength(), bufferSize,
 					fCameraIcon->BytesPerRow(), (int)fConnectedFormat.display.line_width * sizeof(uint32),
 					B_RGBA32, B_RGB32, BPoint(0, 0), cameraPosition,
@@ -810,7 +808,7 @@ VideoProducer::FrameGenerator()
 				if (inverse) {
 					BPrivate::ConvertBits(fLEDIcon->Bits(), buffer->Data(), fLEDIcon->BitsLength(), bufferSize,
 						fLEDIcon->BytesPerRow(), (int)fConnectedFormat.display.line_width * sizeof(uint32),
-						B_RGBA32, B_RGB32, BPoint(0, 0), ledPosition,
+						B_RGBA32, B_RGB32, BPoint(0, 0), BPoint(10, 10),
 						fLEDIcon->Bounds().IntegerWidth(), fLEDIcon->Bounds().IntegerHeight());
 				}
 			}
