@@ -10,7 +10,7 @@ ScreenCapture::ScreenCapture(BScreen *screen)
 	: BDirectWindow(BRect(-2, -2, -1, -1), "FakeDirectWindow",
 		B_NO_BORDER_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL,
 		B_AVOID_FRONT | B_AVOID_FOCUS | B_NO_WORKSPACE_ACTIVATION,
-		B_CURRENT_WORKSPACE)
+		B_ALL_WORKSPACES)
 	,fDirectAvailable(false)
 	,fScreen(screen)
 {
