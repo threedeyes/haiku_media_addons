@@ -10,6 +10,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <algorithm>
+
 #include <Buffer.h>
 #include <BufferGroup.h>
 #include <ParameterWeb.h>
@@ -745,16 +747,19 @@ VideoProducer::FrameGenerator()
 		h->u.raw_video.line_count = fConnectedFormat.display.line_count;
 
 		if (fStreamConnected) {
+			uint32 bufferWidth = fConnectedFormat.display.line_width;
+			uint32 bufferHeight = fConnectedFormat.display.line_count;
+
 			if (fKeepAspect) {
 				memset((unsigned char*)buffer->Data(), 0, buffer->Size());
 				BPoint framePos(0, 0);
-				if (pFrameRGBFixed->width == (int)fConnectedFormat.display.line_width)
-					framePos.Set(0, (fConnectedFormat.display.line_count - pFrameRGBFixed->height) /2);
-				if (pFrameRGBFixed->height == (int)fConnectedFormat.display.line_count)
-					framePos.Set((fConnectedFormat.display.line_width - pFrameRGBFixed->width) /2, 0);
+				if (pFrameRGBFixed->width == bufferWidth)
+					framePos.Set(0, (bufferHeight - pFrameRGBFixed->height) /2);
+				if (pFrameRGBFixed->height == bufferHeight)
+					framePos.Set((bufferWidth - pFrameRGBFixed->width) /2, 0);
 				BPrivate::ConvertBits(pFrameRGBFixed->data[0], buffer->Data(),
 					pFrameRGBFixed->width * pFrameRGBFixed->height * sizeof(uint32), buffer->Size(),
-					pFrameRGBFixed->width * sizeof(uint32), (int)fConnectedFormat.display.line_width * sizeof(uint32),
+					pFrameRGBFixed->width * sizeof(uint32), bufferWidth * sizeof(uint32),
 					B_RGBA32, B_RGB32, BPoint(0, 0), framePos,
 					pFrameRGBFixed->width, pFrameRGBFixed->height);
 			} else {
@@ -762,26 +767,15 @@ VideoProducer::FrameGenerator()
 					(unsigned char*)pFrameRGB->data[0], buffer->Size());
 			}
 			if (fFlipHorizontal) {
-				uint32 *bufferPtr = (uint32*)buffer->Data();
-				uint32 bufferWidth = fConnectedFormat.display.line_width;
-				uint32 bufferHeight = fConnectedFormat.display.line_count;
-				for(int y = 0; y < bufferHeight; y++)
-					for(int x = 0; x < bufferWidth / 2; x++) {
-						uint32 temp = bufferPtr[y * bufferWidth + x];
-						bufferPtr[y * bufferWidth + x] = bufferPtr[y * bufferWidth + (bufferWidth - x)];
-						bufferPtr[y * bufferWidth + (bufferWidth - x)] = temp;
-					}
+				uint32 *ptr = (uint32*)buffer->Data();
+				for(int y = 0; y < bufferHeight; y++, ptr += bufferWidth)
+					std::reverse(ptr, ptr + bufferWidth);
 			}
 			if (fFlipVertical) {
-				uint32 *bufferPtr = (uint32*)buffer->Data();
-				uint32 bufferWidth = fConnectedFormat.display.line_width;
-				uint32 bufferHeight = fConnectedFormat.display.line_count;
-				for(int y = 0; y < bufferHeight / 2; y++)
-					for(int x = 0; x < bufferWidth; x++) {
-						uint32 temp = bufferPtr[y * bufferWidth + x];
-						bufferPtr[y * bufferWidth + x] = bufferPtr[(bufferHeight - y) * bufferWidth + x];
-						bufferPtr[(bufferHeight - y) * bufferWidth + x] = temp;
-					}
+				uint32 *ptrTop = (uint32*)buffer->Data();
+				uint32 *ptrBottom = ptrTop + (bufferHeight - 1) * bufferWidth;
+				for(int y = 0; y < bufferHeight / 2; y++, ptrTop += bufferWidth, ptrBottom -= bufferWidth)
+					std::swap_ranges(ptrTop, ptrTop + bufferWidth, ptrBottom);
 			}
 		} else {
 			bigtime_t now = system_time();
@@ -908,11 +902,11 @@ VideoProducer::StreamReader()
 	packet = (AVPacket *)av_malloc(sizeof(AVPacket));
 
 	img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
-		fConnectedFormat.display.line_width, (int)fConnectedFormat.display.line_count,
+		fConnectedFormat.display.line_width + 1, (int)fConnectedFormat.display.line_count + 1,
 		AV_PIX_FMT_BGR0, SWS_FAST_BILINEAR, NULL, NULL, NULL);
 
 	img_convert_ctx_fixed = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
-		(int)fixedWidth, (int)fixedHeight,
+		(int)fixedWidth + 1, (int)fixedHeight + 1,
 		AV_PIX_FMT_BGR0, SWS_FAST_BILINEAR, NULL, NULL, NULL);
 
 	fDisconnectTime = 0;
