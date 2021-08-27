@@ -397,7 +397,7 @@ VideoProducer::Disconnect(const media_source &source,
 	if ((source != fOutput.source) || (destination != fOutput.destination))
 		return;
 
-	StreamReaderControl(S_STOP);
+	HandleStop();
 
 	fEnabled = false;
 	fOutput.destination = media_destination::null;
