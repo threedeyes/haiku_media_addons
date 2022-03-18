@@ -598,10 +598,14 @@ VideoProducer::HandleStop(void)
 	if (!fRunning)
 		return;
 
-	status_t retval;
-
 	delete_sem(fFrameSync);
-	wait_for_thread(fFrameGeneratorThread, &retval);
+	if (fStreamConnected) {
+		status_t retval;
+		fStreamReaderQuitRequested = true;
+		wait_for_thread(fFrameGeneratorThread, &retval);
+	} else {
+		kill_thread(fFFMEGReaderThread);
+	}
 	fFrameGeneratorThread = -1;
 
 	StreamReaderControl(S_STOP);
@@ -992,9 +996,13 @@ VideoProducer::StreamReaderControl(uint32 state)
 		{
 			thread_info info;
 			if (fFFMEGReaderThread >= B_OK && get_thread_info(fFFMEGReaderThread, &info) == B_OK) {
-				status_t retval;
-				fStreamReaderQuitRequested = true;
-				wait_for_thread(fFFMEGReaderThread, &retval);
+				if (fStreamConnected) {
+					status_t retval;
+					fStreamReaderQuitRequested = true;
+					wait_for_thread(fFFMEGReaderThread, &retval);
+				} else {
+					kill_thread(fFFMEGReaderThread);
+				}
 				fFFMEGReaderThread = -1;
 				fDisconnectTime = system_time();
 				fStreamConnected = false;
