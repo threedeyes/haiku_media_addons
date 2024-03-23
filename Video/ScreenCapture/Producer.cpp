@@ -661,6 +661,8 @@ VideoProducer::LoadAddonSettings()
 		fFlipVertical = 0;
 	if (settings.FindInt32("Direct", &fDirect) != B_OK)
 		fDirect = 1;
+
+	return status;
 }
 
 
