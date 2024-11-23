@@ -671,6 +671,8 @@ VideoProducer::LoadAddonSettings()
 		fContrast = 0;
 	if (settings.FindFloat("Saturation", &fSaturation) != B_OK)
 		fSaturation = 0;
+
+	return B_OK;
 }
 
 
