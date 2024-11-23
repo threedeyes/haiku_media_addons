@@ -310,7 +310,7 @@ VideoProducer::Connect(status_t error, const media_source &source,
 		return;
 	}
 
-	if (	(source != fOutput.source) || (error < B_OK) ||
+	if ((source != fOutput.source) || (error < B_OK) ||
 			!const_cast<media_format *>(&format)->Matches(&fOutput.format)) {
 		return;
 	}
