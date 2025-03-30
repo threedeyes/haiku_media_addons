@@ -713,6 +713,9 @@ VideoProducer::FrameGenerator()
 
 		fFrame++;
 
+		if (!fConnected || !fRunning || !fEnabled)
+			continue;
+
 		wait_until = TimeSource()->RealTimeFor(fPerformanceTimeBase +
 			(bigtime_t)((fFrame - fFrameBase) *
 			(1000000 / fConnectedFormat.field_rate)), 0) - fProcessingLatency;
@@ -950,19 +953,18 @@ VideoProducer::StreamReader()
 				//snooze(delay);
 			}
 		}
-		av_free_packet(packet);
+		av_packet_unref(packet);
 	}
-	fStreamConnected = false;
+
+	if (pFrame) av_frame_free(&pFrame);
+	if (out_buffer) av_free(out_buffer);
+	if (out_buffer_fixed) av_free(out_buffer_fixed);
+	if (pFrameRGB) av_frame_free(&pFrameRGB);
+	if (pFrameRGBFixed) av_frame_free(&pFrameRGBFixed);
+	if (pFormatCtx) avformat_close_input(&pFormatCtx);
+
 	fDisconnectTime = system_time();
-
-	sws_freeContext(img_convert_ctx);
-	sws_freeContext(img_convert_ctx_fixed);
-
-	av_frame_free(&pFrameRGBFixed);
-	av_frame_free(&pFrameRGB);
-	av_frame_free(&pFrame);
-	avcodec_close(pCodecCtx);
-	avformat_close_input(&pFormatCtx);
+	fStreamConnected = false;
 
 	return 0;
 }
