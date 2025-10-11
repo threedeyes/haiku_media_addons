@@ -1,0 +1,148 @@
+/*
+ * Copyright 2025, Gerasim Troeglazov (3dEyes**), 3dEyes@gmail.com.
+ * All rights reserved.
+ * Distributed under the terms of the MIT License.
+ */
+
+#ifndef NETCAST_NODE_H
+#define NETCAST_NODE_H
+
+#include <BufferConsumer.h>
+#include <MediaEventLooper.h>
+#include <MediaNode.h>
+#include <Controllable.h>
+#include <ParameterWeb.h>
+#include <Locker.h>
+#include <String.h>
+#include <File.h>
+
+#include "NetCastEncoder.h"
+#include "NetCastServer.h"
+
+static const int32 kDefaultPort = 8000;
+static const int32 kDefaultBitrate = 128;
+static const int32 kDefaultBufferSize = 2048;
+static const float kDefaultSampleRate = 44100.0f;
+static const int32 kDefaultChannels = 2;
+static const int32 kWAVHeaderSize = 44;
+
+class NetCastNode : public BBufferConsumer, 
+					 public BMediaEventLooper,
+					 public BControllable,
+					 public NetCastServer::Listener {
+public:
+							NetCastNode(BMediaAddOn* addon, BMessage* config);
+	virtual					~NetCastNode();
+
+	virtual BMediaAddOn*	AddOn(int32* internal_id) const;
+	virtual void			NodeRegistered();
+	virtual void			SetRunMode(run_mode mode);
+
+	virtual status_t		HandleMessage(int32 message, const void* data,
+								size_t size);
+	virtual status_t		AcceptFormat(const media_destination& dest,
+								media_format* format);
+	virtual status_t		GetNextInput(int32* cookie, media_input* out_input);
+	virtual void			DisposeInputCookie(int32 cookie);
+	virtual void			BufferReceived(BBuffer* buffer);
+	virtual void			ProducerDataStatus(const media_destination& for_whom,
+								int32 status, bigtime_t at_performance_time);
+	virtual status_t		GetLatencyFor(const media_destination& for_whom,
+								bigtime_t* out_latency,
+								media_node_id* out_timesource);
+	virtual status_t		Connected(const media_source& producer,
+								const media_destination& where,
+								const media_format& with_format,
+								media_input* out_input);
+	virtual void			Disconnected(const media_source& producer,
+								const media_destination& where);
+	virtual status_t		FormatChanged(const media_source& producer,
+								const media_destination& consumer,
+								int32 change_tag, const media_format& format);
+
+	virtual void			HandleEvent(const media_timed_event* event,
+								bigtime_t lateness, bool realTimeEvent);
+
+	virtual status_t		GetParameterValue(int32 id, bigtime_t* last_change,
+								void* value, size_t* size);
+	virtual void			SetParameterValue(int32 id, bigtime_t when,
+								const void* value, size_t size);
+	virtual status_t		StartControlPanel(BMessenger* out_messenger);
+
+	virtual void			OnClientConnected(const char* address, const char* userAgent);
+	virtual void			OnClientDisconnected(const char* address);
+	virtual void			OnServerStarted(const char* url);
+	virtual void			OnServerStopped();
+	virtual void			OnServerError(const char* error);
+
+protected:
+	virtual BParameterWeb*	MakeParameterWeb();
+
+private:
+	enum {
+		P_SERVER_ENABLE = 1000,
+		P_SERVER_PORT,
+		P_CODEC_TYPE,
+		P_BITRATE,
+		P_BUFFER_SIZE,
+		P_SAMPLE_RATE,
+		P_CHANNELS,
+		P_STREAM_URL
+	};
+
+	void					InitDefaults();
+	void					ProcessBuffer(BBuffer* buffer);
+	void					ConvertToStereo16(const void* inData, size_t inSize,
+								const media_raw_audio_format& fmt);
+	void					EncodeAndStream(const int16* pcmData, int32 samples);
+	void					UpdateEncoder();
+	void					PrepareWAVHeader();
+	void					HandleParameter(uint32 parameter);
+
+	void					StartSilenceGenerator();
+	void					StopSilenceGenerator();
+	static int32			_SilenceThread(void* data);
+	void					GenerateSilence();
+
+	status_t				LoadSettings();
+	status_t				SaveSettings();
+	status_t				OpenSettingsFile(BFile& file, uint32 mode);
+
+	BMediaAddOn*			fAddOn;
+	media_input				fInput;
+	bool					fConnected;
+
+	NetCastEncoder*			fEncoder;
+	BLocker					fEncoderLock;
+	EncoderFactory::CodecType fCodecType;
+
+	int16*					fPCMBuffer;
+	size_t					fPCMBufferSize;
+
+	uint8*					fOutputBuffer;
+	size_t					fOutputBufferSize;
+
+	uint8*					fWAVHeader;
+
+	NetCastServer			fServer;
+	bool					fServerEnabled;
+
+	thread_id				fSilenceThread;
+	volatile bool			fSilenceRunning;
+
+	int32					fServerPort;
+	int32					fBitrate;
+	int32					fBufferSize;
+	float					fPreferredSampleRate;
+	int32					fPreferredChannels;
+
+	bigtime_t				fLastPortChange;
+	bigtime_t				fLastCodecChange;
+	bigtime_t				fLastBitrateChange;
+	bigtime_t				fLastBufferSizeChange;
+	bigtime_t				fLastSampleRateChange;
+	bigtime_t				fLastChannelsChange;
+	bigtime_t				fLastServerEnableChange;
+};
+
+#endif
