@@ -8,6 +8,7 @@
 #include <ByteOrder.h>
 
 #include "NetCastEncoder.h"
+#include "NetCastDebug.h"
 
 PCMEncoder::PCMEncoder()
 	: fHeaderSent(false),
@@ -15,31 +16,42 @@ PCMEncoder::PCMEncoder()
 	  fChannels(2),
 	  fDataSize(0)
 {
+	TRACE_CALL("");
 }
 
 PCMEncoder::~PCMEncoder()
 {
+	TRACE_CALL("");
 }
 
 status_t
 PCMEncoder::Init(float sampleRate, int32 channels, int32 bitrate)
 {
+	TRACE_CALL("sampleRate=%.0f, channels=%ld, bitrate=%ld", sampleRate, channels, bitrate);
+
 	fSampleRate = sampleRate;
 	fChannels = channels;
 	fHeaderSent = false;
 	fDataSize = 0;
+
+	TRACE_INFO("PCM encoder initialized: %.0f Hz, %ld channels", sampleRate, channels);
+
 	return B_OK;
 }
 
 void
 PCMEncoder::Uninit()
 {
+	TRACE_CALL("");
 	fHeaderSent = false;
+	TRACE_INFO("PCM encoder uninitialized, total data: %lu bytes", fDataSize);
 }
 
 void
 PCMEncoder::_WriteWAVHeader(uint8* buffer)
 {
+	TRACE_VERBOSE("Writing WAV header");
+
 	uint32 maxSize = 0xFFFFFFFF - 8;
 
 	memcpy(buffer, "RIFF", 4);
@@ -62,19 +74,26 @@ PCMEncoder::_WriteWAVHeader(uint8* buffer)
 int32
 PCMEncoder::Encode(const int16* pcm, int32 samples, uint8* outBuffer, int32 outBufferSize)
 {
+	TRACE_VERBOSE("samples=%ld, bufferSize=%ld", samples, outBufferSize);
+
 	int32 offset = 0;
 
 	if (!fHeaderSent) {
-		if (outBufferSize < 44)
+		if (outBufferSize < 44) {
+			TRACE_ERROR("Output buffer too small for WAV header: %ld < 44", outBufferSize);
 			return 0;
+		}
 		_WriteWAVHeader(outBuffer);
 		offset = 44;
 		fHeaderSent = true;
+		TRACE_INFO("WAV header sent");
 	}
 
 	int32 dataSize = samples * fChannels * 2;
-	if (offset + dataSize > outBufferSize)
+	if (offset + dataSize > outBufferSize) {
+		TRACE_ERROR("Output buffer overflow: %ld + %ld > %ld", offset, dataSize, outBufferSize);
 		return 0;
+	}
 
 	memcpy(outBuffer + offset, pcm, dataSize);
 
@@ -84,12 +103,15 @@ PCMEncoder::Encode(const int16* pcm, int32 samples, uint8* outBuffer, int32 outB
 	}
 
 	fDataSize += dataSize;
+	TRACE_VERBOSE("Encoded %ld bytes PCM data", offset + dataSize);
+
 	return offset + dataSize;
 }
 
 int32
 PCMEncoder::Flush(uint8* outBuffer, int32 outBufferSize)
 {
+	TRACE_VERBOSE("");
 	return 0;
 }
 
@@ -104,19 +126,25 @@ PCMEncoder::RecommendedBufferSize(int32 pcmSamples) const
 MP3Encoder::MP3Encoder()
 	: fLame(NULL)
 {
+	TRACE_CALL("");
 }
 
 MP3Encoder::~MP3Encoder()
 {
+	TRACE_CALL("");
 	Uninit();
 }
 
 status_t
 MP3Encoder::Init(float sampleRate, int32 channels, int32 bitrate)
 {
+	TRACE_CALL("sampleRate=%.0f, channels=%ld, bitrate=%ld", sampleRate, channels, bitrate);
+
 	fLame = lame_init();
-	if (!fLame)
+	if (!fLame) {
+		TRACE_ERROR("Failed to initialize LAME encoder");
 		return B_NO_MEMORY;
+	}
 
 	lame_set_num_channels(fLame, channels);
 	lame_set_in_samplerate(fLame, (int)sampleRate);
@@ -128,10 +156,13 @@ MP3Encoder::Init(float sampleRate, int32 channels, int32 bitrate)
 	lame_set_error_protection(fLame, 1);
 
 	if (lame_init_params(fLame) < 0) {
+		TRACE_ERROR("Failed to initialize LAME parameters");
 		lame_close(fLame);
 		fLame = NULL;
 		return B_ERROR;
 	}
+
+	TRACE_INFO("MP3 encoder initialized: %.0f Hz, %ld channels, %ld kbps", sampleRate, channels, bitrate);
 
 	return B_OK;
 }
@@ -139,29 +170,50 @@ MP3Encoder::Init(float sampleRate, int32 channels, int32 bitrate)
 void
 MP3Encoder::Uninit()
 {
+	TRACE_CALL("");
 	if (fLame) {
 		lame_close(fLame);
 		fLame = NULL;
+		TRACE_INFO("MP3 encoder uninitialized");
 	}
 }
 
 int32
 MP3Encoder::Encode(const int16* pcm, int32 samples, uint8* outBuffer, int32 outBufferSize)
 {
-	if (!fLame)
-		return -1;
+	TRACE_VERBOSE("samples=%ld, bufferSize=%ld", samples, outBufferSize);
 
-	return lame_encode_buffer_interleaved(fLame,
+	if (!fLame) {
+		TRACE_ERROR("LAME encoder not initialized");
+		return -1;
+	}
+
+	int32 encoded = lame_encode_buffer_interleaved(fLame,
 		(short int*)pcm, samples, outBuffer, outBufferSize);
+
+	if (encoded < 0) {
+		TRACE_ERROR("LAME encoding failed: %ld", encoded);
+		return -1;
+	}
+
+	TRACE_VERBOSE("Encoded %ld bytes MP3 data", encoded);
+	return encoded;
 }
 
 int32
 MP3Encoder::Flush(uint8* outBuffer, int32 outBufferSize)
 {
-	if (!fLame)
-		return 0;
+	TRACE_VERBOSE("");
 
-	return lame_encode_flush(fLame, outBuffer, outBufferSize);
+	if (!fLame) {
+		TRACE_WARNING("LAME encoder not initialized on flush");
+		return 0;
+	}
+
+	int32 flushed = lame_encode_flush(fLame, outBuffer, outBufferSize);
+	TRACE_INFO("Flushed %ld bytes from MP3 encoder", flushed);
+
+	return flushed;
 }
 
 int32
@@ -175,16 +227,27 @@ MP3Encoder::RecommendedBufferSize(int32 pcmSamples) const
 NetCastEncoder*
 EncoderFactory::CreateEncoder(CodecType type)
 {
+	TRACE_CALL("type=%d", type);
+
+	NetCastEncoder* encoder = NULL;
+
 	switch (type) {
 		case CODEC_PCM:
-			return new PCMEncoder();
+			encoder = new PCMEncoder();
+			TRACE_INFO("Created PCM encoder");
+			break;
 #ifdef HAVE_LAME
 		case CODEC_MP3:
-			return new MP3Encoder();
+			encoder = new MP3Encoder();
+			TRACE_INFO("Created MP3 encoder");
+			break;
 #endif
 		default:
+			TRACE_ERROR("Unknown codec type: %d", type);
 			return NULL;
 	}
+
+	return encoder;
 }
 
 const char*

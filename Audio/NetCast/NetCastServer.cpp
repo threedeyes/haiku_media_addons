@@ -13,6 +13,7 @@
 #include <new>
 
 #include "NetCastServer.h"
+#include "NetCastDebug.h"
 
 NetCastServer::NetCastServer()
 	: fServerSocket(NULL),
@@ -25,10 +26,12 @@ NetCastServer::NetCastServer()
 	  fStreamHeaderSize(0),
 	  fListener(NULL)
 {
+	TRACE_CALL("");
 }
 
 NetCastServer::~NetCastServer()
 {
+	TRACE_CALL("");
 	Stop();
 	delete[] fStreamHeader;
 }
@@ -36,7 +39,10 @@ NetCastServer::~NetCastServer()
 status_t
 NetCastServer::Start(int32 port)
 {
+	TRACE_CALL("port=%ld", port);
+
 	if (fServerRunning) {
+		TRACE_ERROR("Server already running");
 		if (fListener)
 			fListener->OnServerError("Server already running");
 		return B_ERROR;
@@ -46,6 +52,7 @@ NetCastServer::Start(int32 port)
 
 	fServerSocket = new(std::nothrow) BSocket();
 	if (!fServerSocket) {
+		TRACE_ERROR("Failed to create socket");
 		if (fListener)
 			fListener->OnServerError("Failed to create socket");
 		return B_NO_MEMORY;
@@ -55,6 +62,8 @@ NetCastServer::Start(int32 port)
 
 	status_t status = fServerSocket->Bind(address, true);
 	if (status != B_OK) {
+		TRACE_ERROR("Bind failed on port %ld: 0x%lx (%s)",
+			fServerPort, status, strerror(status));
 		if (fListener) {
 			BString error;
 			error << "Bind failed: " << strerror(status);
@@ -67,6 +76,7 @@ NetCastServer::Start(int32 port)
 
 	status = fServerSocket->Listen(kServerMaxClients);
 	if (status != B_OK) {
+		TRACE_ERROR("Listen failed: 0x%lx (%s)", status, strerror(status));
 		if (fListener) {
 			BString error;
 			error << "Listen failed: " << strerror(status);
@@ -84,6 +94,7 @@ NetCastServer::Start(int32 port)
 								 B_LOW_PRIORITY, this);
 
 	if (fServerThread < 0) {
+		TRACE_ERROR("Failed to spawn server thread: %ld", fServerThread);
 		if (fListener)
 			fListener->OnServerError("Failed to spawn server thread");
 		fServerRunning = false;
@@ -96,6 +107,8 @@ NetCastServer::Start(int32 port)
 
 	UpdateStreamURL();
 
+	TRACE_INFO("Server started on port %ld: %s", fServerPort, fStreamURL.String());
+
 	if (fListener)
 		fListener->OnServerStarted(fStreamURL.String());
 
@@ -105,6 +118,8 @@ NetCastServer::Start(int32 port)
 void
 NetCastServer::Stop()
 {
+	TRACE_CALL("");
+
 	if (!fServerRunning)
 		return;
 
@@ -118,10 +133,13 @@ NetCastServer::Stop()
 	if (fServerThread >= 0) {
 		status_t result;
 		wait_for_thread(fServerThread, &result);
+		TRACE_INFO("Server thread stopped");
 		fServerThread = -1;
 	}
 
 	CleanupClients();
+
+	TRACE_INFO("Server stopped");
 
 	if (fListener)
 		fListener->OnServerStopped();
@@ -130,6 +148,8 @@ NetCastServer::Stop()
 void
 NetCastServer::BroadcastData(const uint8* data, size_t size)
 {
+	TRACE_VERBOSE("Broadcasting %lu bytes to clients", size);
+
 	if (!fClientsLock.Lock())
 		return;
 
@@ -145,11 +165,16 @@ NetCastServer::BroadcastData(const uint8* data, size_t size)
 			
 			if (sent == static_cast<ssize_t>(fStreamHeaderSize)) {
 				client->headerSent = true;
+				TRACE_VERBOSE("Sent header to client %s", client->address.String());
+			} else {
+				TRACE_WARNING("Failed to send header to %s: sent=%ld",
+					client->address.String(), sent);
 			}
 		}
 
 		ssize_t sent = client->socket->Write(data, size);
 		if (sent <= 0) {
+			TRACE_WARNING("Client %s disconnected (write error)", client->address.String());
 			if (fListener)
 				fListener->OnClientDisconnected(client->address.String());
 			
@@ -165,6 +190,7 @@ NetCastServer::BroadcastData(const uint8* data, size_t size)
 void
 NetCastServer::SetStreamInfo(const char* mimeType, int32 bitrate)
 {
+	TRACE_INFO("Stream info updated: %s, %ld kbps", mimeType, bitrate);
 	fMimeType = mimeType;
 	fBitrate = bitrate;
 }
@@ -172,6 +198,8 @@ NetCastServer::SetStreamInfo(const char* mimeType, int32 bitrate)
 void
 NetCastServer::SendHeaderToNewClients(const uint8* header, size_t headerSize)
 {
+	TRACE_CALL("headerSize=%lu", headerSize);
+
 	fHeaderLock.Lock();
 
 	delete[] fStreamHeader;
@@ -183,7 +211,12 @@ NetCastServer::SendHeaderToNewClients(const uint8* header, size_t headerSize)
 		if (fStreamHeader) {
 			memcpy(fStreamHeader, header, headerSize);
 			fStreamHeaderSize = headerSize;
+			TRACE_INFO("Stream header set: %lu bytes", headerSize);
+		} else {
+			TRACE_ERROR("Failed to allocate stream header: %lu bytes", headerSize);
 		}
+	} else {
+		TRACE_INFO("Stream header cleared");
 	}
 
 	fHeaderLock.Unlock();
@@ -209,6 +242,9 @@ NetCastServer::_ServerThread(void* data)
 void
 NetCastServer::ServerLoop()
 {
+	TRACE_CALL("");
+	TRACE_INFO("Server loop started");
+
 	while (fServerRunning) {
 		BAbstractSocket* clientSocket = NULL;
 		status_t status = fServerSocket->Accept(clientSocket);
@@ -216,17 +252,22 @@ NetCastServer::ServerLoop()
 		if (status == B_TIMED_OUT)
 			continue;
 		
-		if (status != B_OK)
+		if (status != B_OK) {
+			TRACE_WARNING("Accept failed: 0x%lx", status);
 			continue;
+		}
 		
-		if (!clientSocket)
+		if (!clientSocket) {
+			TRACE_WARNING("Accept returned NULL socket");
 			continue;
+		}
 		
 		fClientsLock.Lock();
 		int32 clientCount = fClients.CountItems();
 		fClientsLock.Unlock();
 
 		if (clientCount >= kServerMaxClients) {
+			TRACE_WARNING("Rejecting client: maximum %d clients reached", kServerMaxClients);
 			BString response = "HTTP/1.1 503 Service Unavailable\r\n"
 							   "Content-Type: text/plain\r\n"
 							   "Connection: close\r\n\r\n"
@@ -240,19 +281,27 @@ NetCastServer::ServerLoop()
 
 		HandleClient(clientSocket);
 	}
+
+	TRACE_INFO("Server loop ended");
 }
 
 bool
 NetCastServer::ParseHTTPRequest(const char* request, BString& path, BString& userAgent)
 {
-	if (strncmp(request, "GET ", 4) != 0)
+	TRACE_VERBOSE("Parsing HTTP request");
+
+	if (strncmp(request, "GET ", 4) != 0) {
+		TRACE_WARNING("Not a GET request");
 		return false;
+	}
 
 	const char* pathStart = request + 4;
 	const char* pathEnd = strchr(pathStart, ' ');
 
-	if (!pathEnd)
+	if (!pathEnd) {
+		TRACE_WARNING("Invalid HTTP request format");
 		return false;
+	}
 
 	path.SetTo(pathStart, pathEnd - pathStart);
 
@@ -266,24 +315,31 @@ NetCastServer::ParseHTTPRequest(const char* request, BString& path, BString& use
 		}
 	}
 
+	TRACE_VERBOSE("Parsed: path='%s', user-agent='%s'", path.String(), userAgent.String());
+
 	return true;
 }
 
 void
 NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 {
+	TRACE_CALL("client=%p", clientSocket);
+
 	char buffer[kServerHTTPBufferSize];
 	ssize_t bytesRead = clientSocket->Read(buffer, sizeof(buffer) - 1);
 
 	if (bytesRead <= 0) {
+		TRACE_WARNING("Failed to read from client: %ld", bytesRead);
 		delete clientSocket;
 		return;
 	}
 
 	buffer[bytesRead] = '\0';
+	TRACE_VERBOSE("Received %ld bytes from client", bytesRead);
 
 	BString path, userAgent;
 	if (!ParseHTTPRequest(buffer, path, userAgent)) {
+		TRACE_WARNING("Invalid HTTP request");
 		BString response = "HTTP/1.1 400 Bad Request\r\n"
 						   "Content-Type: text/plain\r\n"
 						   "Connection: close\r\n\r\n"
@@ -294,6 +350,7 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	}
 
 	if (path != "/stream" && path != "/stream.wav" && path != "/stream.mp3") {
+		TRACE_WARNING("Invalid path requested: %s", path.String());
 		BString response = "HTTP/1.1 404 Not Found\r\n"
 						   "Content-Type: text/plain\r\n"
 						   "Connection: close\r\n\r\n"
@@ -321,6 +378,8 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	fClients.AddItem(info);
 	fClientsLock.Unlock();
 
+	TRACE_INFO("Client accepted: %s [%s]", info->address.String(), userAgent.String());
+
 	if (fListener)
 		fListener->OnClientConnected(info->address.String(), userAgent.String());
 }
@@ -328,6 +387,8 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 void
 NetCastServer::SendHTTPResponse(BAbstractSocket* socket)
 {
+	TRACE_VERBOSE("Sending HTTP response");
+
 	BString response;
 	response << "HTTP/1.1 200 OK\r\n";
 	response << "Content-Type: " << fMimeType << "\r\n";
@@ -345,6 +406,8 @@ NetCastServer::SendHTTPResponse(BAbstractSocket* socket)
 void
 NetCastServer::UpdateStreamURL()
 {
+	TRACE_CALL("");
+
 	BNetworkRoster& roster = BNetworkRoster::Default();
 	BNetworkInterface interface;
 	uint32 cookie = 0;
@@ -371,6 +434,7 @@ NetCastServer::UpdateStreamURL()
 							fStreamURL << "http://" << addrString << ":" 
 									  << fServerPort << "/stream";
 							foundAddress = true;
+							TRACE_VERBOSE("Found network address: %s", addrString.String());
 						}
 					}
 				}
@@ -378,15 +442,22 @@ NetCastServer::UpdateStreamURL()
 		}
 	}
 
-	if (!foundAddress)
+	if (!foundAddress) {
 		fStreamURL << "http://localhost:" << fServerPort << "/stream";
+		TRACE_WARNING("No network interface found, using localhost");
+	}
+
+	TRACE_INFO("Stream URL: %s", fStreamURL.String());
 }
 
 void
 NetCastServer::CleanupClients()
 {
+	TRACE_CALL("");
+
 	fClientsLock.Lock();
-	for (int32 i = 0; i < fClients.CountItems(); i++) {
+	int32 count = fClients.CountItems();
+	for (int32 i = 0; i < count; i++) {
 		ClientInfo* client = static_cast<ClientInfo*>(fClients.ItemAt(i));
 		if (client) {
 			delete client->socket;
@@ -395,4 +466,6 @@ NetCastServer::CleanupClients()
 	}
 	fClients.MakeEmpty();
 	fClientsLock.Unlock();
+
+	TRACE_INFO("All clients cleaned up");
 }

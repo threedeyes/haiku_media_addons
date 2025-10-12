@@ -8,10 +8,13 @@
 
 #include "NetCastAddOn.h"
 #include "NetCastNode.h"
+#include "NetCastDebug.h"
 
 NetCastAddOn::NetCastAddOn(image_id image)
 	: BMediaAddOn(image)
 {
+	TRACE_CALL("image_id=%ld", image);
+
 	fFormat.type = B_MEDIA_RAW_AUDIO;
 	fFormat.require_flags = 0;
 	fFormat.deny_flags = B_MEDIA_MAUI_UNDEFINED_FLAGS;
@@ -27,29 +30,39 @@ NetCastAddOn::NetCastAddOn(image_id image)
 	fInfo.in_formats = &fFormat;
 	fInfo.out_format_count = 0;
 	fInfo.out_formats = NULL;
+
+	TRACE_INFO("NetCast addon initialized");
 }
 
 NetCastAddOn::~NetCastAddOn()
 {
+	TRACE_CALL("");
+	TRACE_INFO("NetCast addon destroyed");
 }
 
 status_t
 NetCastAddOn::InitCheck(const char** out_failure_text)
 {
+	TRACE_CALL("");
 	return B_OK;
 }
 
 int32
 NetCastAddOn::CountFlavors()
 {
+	TRACE_VERBOSE("");
 	return 1;
 }
 
 status_t
 NetCastAddOn::GetFlavorAt(int32 n, const flavor_info** out_info)
 {
-	if (n != 0)
+	TRACE_VERBOSE("n=%ld", n);
+
+	if (n != 0) {
+		TRACE_ERROR("Invalid flavor index: %ld", n);
 		return B_ERROR;
+	}
 
 	*out_info = &fInfo;
 	return B_OK;
@@ -59,14 +72,20 @@ BMediaNode*
 NetCastAddOn::InstantiateNodeFor(const flavor_info* info,
 	BMessage* config, status_t* out_error)
 {
+	TRACE_CALL("flavor_id=%ld", info ? info->internal_id : -1);
+
 	if (out_error)
 		*out_error = B_OK;
 
-	return new NetCastNode(this, config);
+	BMediaNode* node = new NetCastNode(this, config);
+	TRACE_INFO("NetCastNode instantiated: %p", node);
+
+	return node;
 }
 
 extern "C" _EXPORT BMediaAddOn*
 make_media_addon(image_id image)
 {
+	TRACE_CALL("image_id=%ld", image);
 	return new NetCastAddOn(image);
 }
