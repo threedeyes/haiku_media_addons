@@ -150,10 +150,12 @@ MP3Encoder::Init(float sampleRate, int32 channels, int32 bitrate)
 	lame_set_in_samplerate(fLame, (int)sampleRate);
 	lame_set_out_samplerate(fLame, (int)sampleRate);
 	lame_set_brate(fLame, bitrate);
-	lame_set_quality(fLame, 3);
+	lame_set_quality(fLame, 5);
 	lame_set_mode(fLame, channels == 2 ? STEREO : MONO);
 	lame_set_bWriteVbrTag(fLame, 0);
 	lame_set_error_protection(fLame, 1);
+	lame_set_disable_reservoir(fLame, 1);
+	lame_set_strict_ISO(fLame, 0);
 
 	if (lame_init_params(fLame) < 0) {
 		TRACE_ERROR("Failed to initialize LAME parameters");
@@ -162,7 +164,8 @@ MP3Encoder::Init(float sampleRate, int32 channels, int32 bitrate)
 		return B_ERROR;
 	}
 
-	TRACE_INFO("MP3 encoder initialized: %.0f Hz, %ld channels, %ld kbps", sampleRate, channels, bitrate);
+	TRACE_INFO("MP3 encoder initialized: %.0f Hz, %ld channels, %ld kbps",
+			   sampleRate, channels, bitrate);
 
 	return B_OK;
 }
