@@ -9,6 +9,8 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
+#include <fcntl.h>
 
 #include <new>
 
@@ -162,22 +164,49 @@ NetCastServer::BroadcastData(const uint8* data, size_t size)
 			fHeaderLock.Lock();
 			ssize_t sent = client->socket->Write(fStreamHeader, fStreamHeaderSize);
 			fHeaderLock.Unlock();
-			
+
 			if (sent == static_cast<ssize_t>(fStreamHeaderSize)) {
 				client->headerSent = true;
 				TRACE_VERBOSE("Sent header to client %s", client->address.String());
-			} else {
-				TRACE_WARNING("Failed to send header to %s: sent=%ld",
-					client->address.String(), sent);
+			} else if (sent < 0 && errno != EWOULDBLOCK && errno != EAGAIN) {
+				TRACE_WARNING("Failed to send header to %s: %s",
+					client->address.String(), strerror(errno));
+				delete client->socket;
+				fClients.RemoveItem(i);
+				delete client;
+				if (fListener)
+					fListener->OnClientDisconnected(client->address.String());
+				continue;
 			}
 		}
 
 		ssize_t sent = client->socket->Write(data, size);
-		if (sent <= 0) {
-			TRACE_WARNING("Client %s disconnected (write error)", client->address.String());
+
+		bool shouldDisconnect = false;
+
+		if (sent < 0) {
+			if (errno == EWOULDBLOCK || errno == EAGAIN) {
+				TRACE_VERBOSE("Client %s buffer full, would block",
+					client->address.String());
+			} else {
+				TRACE_WARNING("Write error for client %s: %s",
+					client->address.String(), strerror(errno));
+				shouldDisconnect = true;
+			}
+		} else if (sent == 0) {
+			TRACE_WARNING("Connection closed for client %s",
+				client->address.String());
+			shouldDisconnect = true;
+		} else if (sent < static_cast<ssize_t>(size)) {
+			TRACE_VERBOSE("Client %s partial write: %ld of %lu bytes",
+				client->address.String(), sent, size);
+		}
+
+		if (shouldDisconnect) {
+			TRACE_INFO("Disconnecting client %s", client->address.String());
 			if (fListener)
 				fListener->OnClientDisconnected(client->address.String());
-			
+
 			delete client->socket;
 			fClients.RemoveItem(i);
 			delete client;
@@ -361,6 +390,15 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	}
 
 	SendHTTPResponse(clientSocket);
+
+	int sockfd = clientSocket->Socket();
+	int flags = fcntl(sockfd, F_GETFL, 0);
+	if (flags >= 0) {
+		fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+		TRACE_VERBOSE("Set socket to non-blocking mode");
+	} else {
+		TRACE_WARNING("Failed to get socket flags: %s", strerror(errno));
+	}
 
 	ClientInfo* info = new ClientInfo;
 	info->socket = clientSocket;
