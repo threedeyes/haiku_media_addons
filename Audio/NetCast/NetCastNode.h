@@ -15,6 +15,7 @@
 #include <Locker.h>
 #include <String.h>
 #include <File.h>
+#include <TimeSource.h>
 
 #include "NetCastEncoder.h"
 #include "NetCastServer.h"
@@ -26,10 +27,11 @@ static const float kDefaultSampleRate = 44100.0f;
 static const int32 kDefaultChannels = 2;
 static const int32 kWAVHeaderSize = 44;
 
-class NetCastNode : public BBufferConsumer, 
+class NetCastNode : public BBufferConsumer,
 					 public BMediaEventLooper,
 					 public BControllable,
-					 public NetCastServer::Listener {
+					 public NetCastServer::Listener,
+					 public BTimeSource {
 public:
 							NetCastNode(BMediaAddOn* addon, BMessage* config);
 	virtual					~NetCastNode();
@@ -75,6 +77,8 @@ public:
 	virtual void			OnServerStopped();
 	virtual void			OnServerError(const char* error);
 
+	virtual status_t		TimeSourceOp(const time_source_op_info& op, void* _reserved);
+
 protected:
 	virtual BParameterWeb*	MakeParameterWeb();
 
@@ -107,6 +111,9 @@ private:
 	status_t				LoadSettings();
 	status_t				SaveSettings();
 	status_t				OpenSettingsFile(BFile& file, uint32 mode);
+
+	static int32			_ClockThread(void* data);
+	void					_ClockLoop();
 
 	BMediaAddOn*			fAddOn;
 	media_input				fInput;
@@ -143,6 +150,10 @@ private:
 	bigtime_t				fLastSampleRateChange;
 	bigtime_t				fLastChannelsChange;
 	bigtime_t				fLastServerEnableChange;
+
+	volatile bool			fStarted;
+	volatile bool			fTSRunning;
+	thread_id				fTSThread;
 };
 
 #endif

@@ -52,7 +52,10 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 	  fLastBufferSizeChange(0),
 	  fLastSampleRateChange(0),
 	  fLastChannelsChange(0),
-	  fLastServerEnableChange(0)
+	  fLastServerEnableChange(0),
+	  fStarted(false),
+	  fTSRunning(false),
+	  fTSThread(-1)
 {
 	TRACE_CALL("addon=%p", addon);
 
@@ -105,18 +108,6 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 	}
 
 	SetEventLatency(10000);
-
-	fInput.node = Node();
-	fInput.source = media_source::null;
-	fInput.destination.port = ControlPort();
-	fInput.destination.id = 0;
-	fInput.format.type = B_MEDIA_RAW_AUDIO;
-	fInput.format.u.raw_audio = media_raw_audio_format::wildcard;
-	fInput.format.u.raw_audio.channel_count = fPreferredChannels;
-	fInput.format.u.raw_audio.frame_rate = fPreferredSampleRate;
-	fInput.format.u.raw_audio.format = media_raw_audio_format::B_AUDIO_SHORT;
-	fInput.format.u.raw_audio.byte_order = B_MEDIA_HOST_ENDIAN;
-	strcpy(fInput.name, "audio input");
 
 	fEncoder = EncoderFactory::CreateEncoder(fCodecType);
 	if (!fEncoder) {
@@ -205,6 +196,22 @@ void
 NetCastNode::NodeRegistered()
 {
 	TRACE_CALL("");
+
+	AddNodeKind(B_TIME_SOURCE);
+
+	fInput.node = Node();
+	fInput.source = media_source::null;
+	fInput.destination.port = ControlPort();
+	fInput.destination.id = 0;
+	fInput.format.type = B_MEDIA_RAW_AUDIO;
+	fInput.format.u.raw_audio = media_raw_audio_format::wildcard;
+	fInput.format.u.raw_audio.channel_count = fPreferredChannels;
+	fInput.format.u.raw_audio.frame_rate = fPreferredSampleRate;
+	fInput.format.u.raw_audio.format = media_raw_audio_format::B_AUDIO_SHORT;
+	fInput.format.u.raw_audio.byte_order = B_MEDIA_HOST_ENDIAN;
+	strcpy(fInput.name, "audio input");
+
+	fStarted = false;
 
 	SetPriority(B_URGENT_PRIORITY);
 
@@ -371,7 +378,7 @@ NetCastNode::GetLatencyFor(const media_destination& for_whom,
 		return B_MEDIA_BAD_DESTINATION;
 	}
 
-	*out_latency = 10000;
+	*out_latency = EventLatency();
 	*out_timesource = TimeSource()->ID();
 	return B_OK;
 }
@@ -383,7 +390,7 @@ NetCastNode::Connected(const media_source& producer,
 {
 	TRACE_CALL("producer.port=%ld, producer.id=%ld", producer.port, producer.id);
 
-	if (where.port != ControlPort() || where.id != 0) {
+	if (where.port != ControlPort()) {
 		TRACE_ERROR("Bad destination in Connected");
 		return B_MEDIA_BAD_DESTINATION;
 	}
@@ -489,15 +496,18 @@ NetCastNode::HandleEvent(const media_timed_event* event,
 
 	switch (event->type) {
 		case BTimedEventQueue::B_HANDLE_BUFFER:
-			ProcessBuffer(static_cast<BBuffer*>(event->pointer));
+			if (fStarted)
+				ProcessBuffer(static_cast<BBuffer*>(event->pointer));
 			static_cast<BBuffer*>(event->pointer)->Recycle();
 			break;
 
 		case BTimedEventQueue::B_START:
+			fStarted = true;
 			TRACE_INFO("Node started");
 			break;
 
 		case BTimedEventQueue::B_STOP:
+			fStarted = false;
 			TRACE_INFO("Node stopped");
 			EventQueue()->FlushEvents(0, BTimedEventQueue::B_ALWAYS, true,
 				BTimedEventQueue::B_HANDLE_BUFFER);
@@ -634,6 +644,21 @@ NetCastNode::ConvertToStereo16(const void* inData, size_t inSize,
 					sample = 0;
 				}
 				out[i * outChannels + ch] = static_cast<int16>(sample << 8);
+			}
+		}
+	} else if (fmt.format == media_raw_audio_format::B_AUDIO_UCHAR) {
+		const uint8* in = static_cast<const uint8*>(inData);
+		for (int32 i = 0; i < inFrames; i++) {
+			for (int32 ch = 0; ch < outChannels; ch++) {
+				uint8 sample;
+				if (inChannels == 1) {
+					sample = in[i];
+				} else if (ch < inChannels) {
+					sample = in[i * inChannels + ch];
+				} else {
+					sample = 128;
+				}
+				out[i * outChannels + ch] = static_cast<int16>((int(sample) - 128) << 8);
 			}
 		}
 	}
@@ -1385,4 +1410,58 @@ NetCastNode::StartControlPanel(BMessenger* out_messenger)
 {
 	TRACE_CALL("");
 	return B_ERROR;
+}
+
+status_t
+NetCastNode::TimeSourceOp(const time_source_op_info& op, void* _reserved)
+{
+	switch (op.op) {
+		case B_TIMESOURCE_START:
+			if (!fTSRunning) {
+				fTSRunning = true;
+				fTSThread = spawn_thread(_ClockThread, "NetCast TimeSource",
+					B_REAL_TIME_PRIORITY, this);
+				if (fTSThread >= 0)
+					resume_thread(fTSThread);
+			}
+			break;
+		case B_TIMESOURCE_STOP:
+		case B_TIMESOURCE_STOP_IMMEDIATELY:
+			if (fTSRunning) {
+				fTSRunning = false;
+				status_t r;
+				if (fTSThread >= 0) {
+					wait_for_thread(fTSThread, &r);
+					fTSThread = -1;
+				}
+				PublishTime(0, 0, 1.0f);
+			}
+			break;
+		case B_TIMESOURCE_SEEK:
+			BroadcastTimeWarp(op.real_time, op.performance_time);
+			break;
+		default:
+			break;
+	}
+	return B_OK;
+}
+
+int32
+NetCastNode::_ClockThread(void* data)
+{
+	static_cast<NetCastNode*>(data)->_ClockLoop();
+	return 0;
+}
+
+void
+NetCastNode::_ClockLoop()
+{
+	bigtime_t baseReal = system_time();
+	bigtime_t basePerf = 0;
+	while (fTSRunning) {
+		bigtime_t now = system_time();
+		bigtime_t perf = basePerf + (now - baseReal);
+		PublishTime(perf, now, 1.0f);
+		snooze(5000);
+	}
 }
