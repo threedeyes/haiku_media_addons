@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/tcp.h>
 
 #include <new>
 
@@ -392,12 +393,18 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	SendHTTPResponse(clientSocket);
 
 	int sockfd = clientSocket->Socket();
+
 	int flags = fcntl(sockfd, F_GETFL, 0);
 	if (flags >= 0) {
 		fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 		TRACE_VERBOSE("Set socket to non-blocking mode");
+	}
+
+	int nodelay = 1;
+	if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay)) == 0) {
+		TRACE_VERBOSE("TCP_NODELAY enabled for low latency");
 	} else {
-		TRACE_WARNING("Failed to get socket flags: %s", strerror(errno));
+		TRACE_WARNING("Failed to enable TCP_NODELAY: %s", strerror(errno));
 	}
 
 	ClientInfo* info = new ClientInfo;
