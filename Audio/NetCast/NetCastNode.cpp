@@ -39,8 +39,6 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 	  fOutputBufferSize(0),
 	  fWAVHeader(NULL),
 	  fServerEnabled(false),
-	  fSilenceThread(-1),
-	  fSilenceRunning(false),
 	  fServerPort(kDefaultPort),
 	  fBitrate(kDefaultBitrate),
 	  fBufferSize(kDefaultBufferSize),
@@ -136,8 +134,6 @@ NetCastNode::~NetCastNode()
 {
 	TRACE_CALL("");
 
-	StopSilenceGenerator();
-
 	fServer.Stop();
 
 	BMediaEventLooper::Quit();
@@ -221,6 +217,22 @@ NetCastNode::NodeRegistered()
 		SaveSettings();
 	}
 
+	fEncoderLock.Lock();
+
+	NetCastEncoder* savedEncoder = EncoderFactory::CreateEncoder(fCodecType);
+	if (savedEncoder) {
+		if (fEncoder) {
+			fEncoder->Uninit();
+			delete fEncoder;
+		}
+		fEncoder = savedEncoder;
+		TRACE_INFO("Encoder recreated from settings: type=%d", fCodecType);
+	} else {
+		TRACE_ERROR("Failed to create encoder from settings, keeping default");
+	}
+
+	fEncoderLock.Unlock();
+
 	BParameterWeb* web = MakeParameterWeb();
 	SetParameterWeb(web);
 
@@ -229,7 +241,6 @@ NetCastNode::NodeRegistered()
 	if (fServerEnabled) {
 		TRACE_INFO("Auto-starting server on port %ld", fServerPort);
 		fServer.Start(fServerPort);
-		StartSilenceGenerator();
 	}
 
 	TRACE_INFO("Node registered and running");
@@ -683,8 +694,6 @@ NetCastNode::EncodeAndStream(const int16* pcmData, int32 samples)
 	int32 encodedSize = fEncoder->Encode(pcmData, samples, 
 										 fOutputBuffer, fOutputBufferSize);
 
-	fEncoderLock.Unlock();
-
 	if (encodedSize > 0) {
 		TRACE_VERBOSE("Broadcasting %ld encoded bytes to %ld clients",
 			encodedSize, fServer.GetClientCount());
@@ -692,6 +701,8 @@ NetCastNode::EncodeAndStream(const int16* pcmData, int32 samples)
 	} else if (encodedSize < 0) {
 		TRACE_ERROR("Encoding failed with error: %ld", encodedSize);
 	}
+
+	fEncoderLock.Unlock();
 }
 
 void
@@ -783,128 +794,6 @@ NetCastNode::PrepareWAVHeader()
 	*reinterpret_cast<uint32*>(fWAVHeader + 40) = B_HOST_TO_LENDIAN_INT32(maxSize - 36);
 
 	TRACE_VERBOSE("WAV header: %lu Hz, %d channels", sampleRate, channels);
-}
-
-void
-NetCastNode::StartSilenceGenerator()
-{
-	TRACE_CALL("");
-
-	if (fSilenceRunning) {
-		TRACE_WARNING("Silence generator already running");
-		return;
-	}
-
-	if (!fEncoder) {
-		TRACE_ERROR("No encoder available for silence generator");
-		return;
-	}
-
-	fEncoderLock.Lock();
-
-	float sampleRate = fConnected ? fInput.format.u.raw_audio.frame_rate : fPreferredSampleRate;
-	int32 channels = fConnected ? (fInput.format.u.raw_audio.channel_count >= 2 ? 2 : 1) : fPreferredChannels;
-
-	TRACE_INFO("Initializing silence generator: %.0f Hz, %ld ch", sampleRate, channels);
-
-	status_t result = fEncoder->Init(sampleRate, channels, fBitrate);
-
-	if (result == B_OK) {
-		if (fCodecType == EncoderFactory::CODEC_PCM && fWAVHeader) {
-			PrepareWAVHeader();
-			fServer.SendHeaderToNewClients(fWAVHeader, kWAVHeaderSize);
-		}
-	}
-
-	fEncoderLock.Unlock();
-
-	if (result != B_OK) {
-		TRACE_ERROR("Failed to init encoder for silence: 0x%lx", result);
-		return;
-	}
-
-	fSilenceRunning = true;
-	fSilenceThread = spawn_thread(_SilenceThread, "NetCast Silence Generator",
-								  B_LOW_PRIORITY, this);
-
-	if (fSilenceThread >= 0) {
-		resume_thread(fSilenceThread);
-		TRACE_INFO("Silence generator thread started: %ld", fSilenceThread);
-	} else {
-		TRACE_ERROR("Failed to spawn silence thread: %ld", fSilenceThread);
-		fSilenceRunning = false;
-	}
-}
-
-void
-NetCastNode::StopSilenceGenerator()
-{
-	TRACE_CALL("");
-
-	if (!fSilenceRunning)
-		return;
-
-	fSilenceRunning = false;
-
-	if (fSilenceThread >= 0) {
-		status_t result;
-		wait_for_thread(fSilenceThread, &result);
-		TRACE_INFO("Silence generator thread stopped");
-		fSilenceThread = -1;
-	}
-}
-
-int32
-NetCastNode::_SilenceThread(void* data)
-{
-	NetCastNode* node = static_cast<NetCastNode*>(data);
-	node->GenerateSilence();
-	return 0;
-}
-
-void
-NetCastNode::GenerateSilence()
-{
-	TRACE_CALL("");
-
-	int32 samples = static_cast<int32>(fPreferredSampleRate / 20.0f);
-	int16* silenceBuffer = new(std::nothrow) int16[samples * 2];
-
-	if (!silenceBuffer) {
-		TRACE_ERROR("Failed to allocate silence buffer");
-		return;
-	}
-
-	memset(silenceBuffer, 0, samples * 2 * sizeof(int16));
-
-	TRACE_INFO("Silence generator running: %ld samples per chunk", samples);
-
-	while (fSilenceRunning) {
-		if (!fConnected && fServer.GetClientCount() > 0) {
-			if (!fEncoderLock.Lock()) {
-				snooze(50000);
-				continue;
-			}
-
-			if (fEncoder && fOutputBuffer) {
-				int32 encodedSize = fEncoder->Encode(silenceBuffer, samples,
-													 fOutputBuffer, fOutputBufferSize);
-
-				if (encodedSize > 0) {
-					fServer.BroadcastData(fOutputBuffer, encodedSize);
-					TRACE_VERBOSE("Sent %ld bytes of silence", encodedSize);
-				}
-			}
-
-			fEncoderLock.Unlock();
-		}
-		
-		snooze(50000);
-	}
-
-	delete[] silenceBuffer;
-
-	TRACE_INFO("Silence generator stopped");
 }
 
 void
@@ -1390,9 +1279,7 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 
 				if (enable && !fServer.IsRunning()) {
 					fServer.Start(fServerPort);
-					StartSilenceGenerator();
 				} else if (!enable && fServer.IsRunning()) {
-					StopSilenceGenerator();
 					fServer.Stop();
 				}
 

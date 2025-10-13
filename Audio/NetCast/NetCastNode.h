@@ -103,11 +103,6 @@ private:
 	void					PrepareWAVHeader();
 	void					HandleParameter(uint32 parameter);
 
-	void					StartSilenceGenerator();
-	void					StopSilenceGenerator();
-	static int32			_SilenceThread(void* data);
-	void					GenerateSilence();
-
 	status_t				LoadSettings();
 	status_t				SaveSettings();
 	status_t				OpenSettingsFile(BFile& file, uint32 mode);
@@ -133,9 +128,6 @@ private:
 
 	NetCastServer			fServer;
 	bool					fServerEnabled;
-
-	thread_id				fSilenceThread;
-	volatile bool			fSilenceRunning;
 
 	int32					fServerPort;
 	int32					fBitrate;
