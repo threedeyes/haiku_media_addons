@@ -55,6 +55,7 @@ public:
 								float sampleRate, int32 channels);
 	void					SendHeaderToNewClients(const uint8* header, size_t headerSize);
 
+	BString					GetServerURL() const { return fServerURL; }
 	BString					GetStreamURL() const { return fStreamURL; }
 	int32					GetClientCount();
 	int32					GetPort() const { return fServerPort; }
@@ -85,6 +86,7 @@ private:
 	BList					fClients;
 	BLocker					fClientsLock;
 
+	BString					fServerURL;
 	BString					fStreamURL;
 	BString					fMimeType;
 	int32					fBitrate;

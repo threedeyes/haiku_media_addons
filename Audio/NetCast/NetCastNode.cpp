@@ -900,50 +900,6 @@ NetCastNode::MakeParameterWeb()
 
 	BParameterGroup* mainGroup = web->MakeGroup("NetCast Settings");
 
-	BParameterGroup* serverGroup = mainGroup->MakeGroup("Server Control");
-
-	BDiscreteParameter* enableParam = serverGroup->MakeDiscreteParameter(
-		P_SERVER_ENABLE, B_MEDIA_NO_TYPE, "Enable Server", B_ENABLE);
-	enableParam->AddItem(0, "Disabled");
-	enableParam->AddItem(1, "Enabled");
-
-	serverGroup->MakeTextParameter(
-		P_SERVER_PORT, B_MEDIA_NO_TYPE, "Port: ", B_GENERIC, 16);
-
-	serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
-		"_________________________________________________", B_GENERIC);
-
-	serverGroup->MakeTextParameter(
-		P_STREAM_URL, B_MEDIA_NO_TYPE, "URL: ", B_GENERIC, 256);
-
-	if (fParametersChanged) {
-		serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "\n", B_GENERIC);
-		serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
-			"Restart media services to apply changes", B_GENERIC);
-	}
-
-	BParameterGroup* encodingGroup = mainGroup->MakeGroup("Encoding");
-
-	BDiscreteParameter* codecParam = encodingGroup->MakeDiscreteParameter(
-		P_CODEC_TYPE, B_MEDIA_NO_TYPE, "Codec", B_GENERIC);
-	for (int32 i = 0; i < EncoderFactory::GetCodecCount(); i++) {
-		codecParam->AddItem(i, EncoderFactory::GetCodecName(
-			static_cast<EncoderFactory::CodecType>(i)));
-	}
-
-#ifdef HAVE_LAME
-	if (fCodecType == EncoderFactory::CODEC_MP3) {
-		BDiscreteParameter* bitrateParam = encodingGroup->MakeDiscreteParameter(
-			P_BITRATE, B_MEDIA_NO_TYPE, "Bitrate", B_GENERIC);
-		bitrateParam->AddItem(64, "64 kbps");
-		bitrateParam->AddItem(96, "96 kbps");
-		bitrateParam->AddItem(128, "128 kbps");
-		bitrateParam->AddItem(192, "192 kbps");
-		bitrateParam->AddItem(256, "256 kbps");
-		bitrateParam->AddItem(320, "320 kbps");
-	}
-#endif
-
 	BParameterGroup* formatGroup = mainGroup->MakeGroup("Audio Format");
 
 	BDiscreteParameter* rateParam = formatGroup->MakeDiscreteParameter(
@@ -960,13 +916,61 @@ NetCastNode::MakeParameterWeb()
 	channelsParam->AddItem(1, "Mono");
 	channelsParam->AddItem(2, "Stereo");
 
+	formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "", B_GENERIC);
+
 	BDiscreteParameter* chunkParam = formatGroup->MakeDiscreteParameter(
-		P_CHUNK_SIZE, B_MEDIA_NO_TYPE, "Chunk Size (Latency)", B_GENERIC);
-	chunkParam->AddItem(10, "100 ms (Low CPU)");
-	chunkParam->AddItem(20, "50 ms (Normal)");
-	chunkParam->AddItem(40, "25 ms (Low Latency)");
-	chunkParam->AddItem(80, "12.5 ms (Ultra Low)");
-	chunkParam->AddItem(160, "6.25 ms (Extreme)");
+		P_CHUNK_SIZE, B_MEDIA_NO_TYPE, "Chunk Size", B_GENERIC);
+	chunkParam->AddItem(10, "100 ms");
+	chunkParam->AddItem(20, "50 ms");
+	chunkParam->AddItem(40, "25 ms");
+	chunkParam->AddItem(80, "12.5 ms");
+	chunkParam->AddItem(160, "6.25 ms");
+
+	formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "", B_GENERIC);
+
+	BDiscreteParameter* codecParam = formatGroup->MakeDiscreteParameter(
+		P_CODEC_TYPE, B_MEDIA_NO_TYPE, "Codec", B_GENERIC);
+	for (int32 i = 0; i < EncoderFactory::GetCodecCount(); i++) {
+		codecParam->AddItem(i, EncoderFactory::GetCodecName(
+			static_cast<EncoderFactory::CodecType>(i)));
+	}
+
+#ifdef HAVE_LAME
+	if (fCodecType == EncoderFactory::CODEC_MP3) {
+		BDiscreteParameter* bitrateParam = formatGroup->MakeDiscreteParameter(
+			P_BITRATE, B_MEDIA_NO_TYPE, "Bitrate", B_GENERIC);
+		bitrateParam->AddItem(64, "64 kbps");
+		bitrateParam->AddItem(96, "96 kbps");
+		bitrateParam->AddItem(128, "128 kbps");
+		bitrateParam->AddItem(192, "192 kbps");
+		bitrateParam->AddItem(256, "256 kbps");
+		bitrateParam->AddItem(320, "320 kbps");
+	}
+#endif
+
+	BParameterGroup* serverGroup = mainGroup->MakeGroup("Server Control");
+
+	BDiscreteParameter* enableParam = serverGroup->MakeDiscreteParameter(
+		P_SERVER_ENABLE, B_MEDIA_NO_TYPE, "Enable Server", B_ENABLE);
+	enableParam->AddItem(0, "Disabled");
+	enableParam->AddItem(1, "Enabled");
+
+	serverGroup->MakeTextParameter(
+		P_SERVER_PORT, B_MEDIA_NO_TYPE, "Port: ", B_GENERIC, 16);
+
+	serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
+		"________________________________________________________", B_GENERIC);
+
+	serverGroup->MakeTextParameter(
+		P_SERVER_URL, B_MEDIA_NO_TYPE, "Web Player: ", B_GENERIC, 256);
+	serverGroup->MakeTextParameter(
+		P_STREAM_URL, B_MEDIA_NO_TYPE, "Stream URL: ", B_GENERIC, 256);
+
+	if (fParametersChanged) {
+		formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "\n", B_GENERIC);
+		formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
+			"Restart media services to apply changes", B_GENERIC);
+	}
 
 	return web;
 }
@@ -1041,6 +1045,20 @@ NetCastNode::GetParameterValue(int32 id, bigtime_t* last_change,
 			*last_change = fLastServerEnableChange;
 			return B_OK;
 
+		case P_SERVER_URL: {
+			BString url;
+			if (fServer.IsRunning()) {
+				url = fServer.GetServerURL();
+			} else {
+				url = "Server is not running";
+			}
+			if (*size < static_cast<size_t>(url.Length() + 1))
+				return B_NO_MEMORY;
+			strcpy(static_cast<char*>(value), url.String());
+			*size = url.Length() + 1;
+			*last_change = fLastServerEnableChange;
+			return B_OK;
+		}
 		case P_STREAM_URL: {
 			BString url;
 			if (fServer.IsRunning()) {

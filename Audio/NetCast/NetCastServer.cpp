@@ -733,6 +733,7 @@ NetCastServer::UpdateStreamURL()
 	BNetworkInterface interface;
 	uint32 cookie = 0;
 
+	fServerURL = "";
 	fStreamURL = "";
 
 	bool foundAddress = false;
@@ -752,8 +753,8 @@ NetCastServer::UpdateStreamURL()
 						}
 
 						if (!foundAddress) {
-							fStreamURL << "http://" << addrString << ":" 
-									  << fServerPort << "/stream";
+							fServerURL << "http://" << addrString << ":" << fServerPort;
+							fStreamURL << fServerURL << "/stream";
 							foundAddress = true;
 							TRACE_VERBOSE("Found network address: %s", addrString.String());
 						}

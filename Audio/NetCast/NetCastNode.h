@@ -99,7 +99,8 @@ private:
 		P_CHUNK_SIZE,
 		P_SAMPLE_RATE,
 		P_CHANNELS,
-		P_STREAM_URL
+		P_STREAM_URL,
+		P_SERVER_URL
 	};
 
 	void					InitDefaults();
