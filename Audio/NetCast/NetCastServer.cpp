@@ -394,6 +394,20 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 
 	int sockfd = clientSocket->Socket();
 
+	int sndbuf = 8192;
+	if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0) {
+		TRACE_VERBOSE("Send buffer reduced to %d bytes for low latency", sndbuf);
+	} else {
+		TRACE_WARNING("Failed to set SO_SNDBUF: %s", strerror(errno));
+	}
+
+	int rcvbuf = 4096;
+	if (setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) == 0) {
+		TRACE_VERBOSE("Receive buffer reduced to %d bytes", rcvbuf);
+	} else {
+		TRACE_WARNING("Failed to set SO_RCVBUF: %s", strerror(errno));
+	}
+
 	int flags = fcntl(sockfd, F_GETFL, 0);
 	if (flags >= 0) {
 		fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
@@ -438,10 +452,13 @@ NetCastServer::SendHTTPResponse(BAbstractSocket* socket)
 	response << "HTTP/1.1 200 OK\r\n";
 	response << "Content-Type: " << fMimeType << "\r\n";
 	response << "Connection: close\r\n";
-	response << "Cache-Control: no-cache, no-store\r\n";
+	response << "Cache-Control: no-cache, no-store, must-revalidate\r\n";
 	response << "Pragma: no-cache\r\n";
-	response << "icy-name: NetCast Audio Stream\r\n";
+	response << "Expires: 0\r\n";
+	response << "X-Content-Duration: 0\r\n";
+	response << "icy-name: NetCast Low-Latency Stream\r\n";
 	response << "icy-br: " << fBitrate << "\r\n";
+	response << "icy-pub: 0\r\n";
 	response << "Server: NetCast/1.0 (Haiku)\r\n";
 	response << "\r\n";
 
