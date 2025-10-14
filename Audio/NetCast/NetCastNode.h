@@ -143,6 +143,8 @@ private:
 	float					fPreferredSampleRate;
 	int32					fPreferredChannels;
 
+	bool					fParametersChanged;
+
 	bigtime_t				fLastPortChange;
 	bigtime_t				fLastCodecChange;
 	bigtime_t				fLastBitrateChange;

@@ -44,6 +44,7 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 	  fChunkDivider(kDefaultChunkDivider),
 	  fPreferredSampleRate(kDefaultSampleRate),
 	  fPreferredChannels(kDefaultChannels),
+	  fParametersChanged(false),
 	  fLastPortChange(0),
 	  fLastCodecChange(0),
 	  fLastBitrateChange(0),
@@ -426,6 +427,7 @@ NetCastNode::Connected(const media_source& producer,
 	UpdateEncoder();
 
 	fConnected = true;
+	fParametersChanged = false;
 
 	BParameterWeb* web = MakeParameterWeb();
 	SetParameterWeb(web);
@@ -455,9 +457,6 @@ NetCastNode::Disconnected(const media_source& producer,
 		fEncoder->Uninit();
 
 	fEncoderLock.Unlock();
-	
-	BParameterWeb* web = MakeParameterWeb();
-	SetParameterWeb(web);
 }
 
 status_t
@@ -488,21 +487,6 @@ NetCastNode::HandleParameter(uint32 parameter)
 {
 	TRACE_CALL("parameter=%lu", parameter);
 
-	switch (parameter) {
-		case P_SERVER_ENABLE:
-		case P_SERVER_PORT:
-		case P_CODEC_TYPE:
-		case P_BITRATE:
-		case P_CHUNK_SIZE:
-		case P_SAMPLE_RATE:
-		case P_CHANNELS:
-		{
-			BParameterWeb* web = MakeParameterWeb();
-			SetParameterWeb(web);
-			break;
-		}
-	}
-	
 	SaveSettings();
 }
 
@@ -972,76 +956,73 @@ NetCastNode::MakeParameterWeb()
 
 	BParameterGroup* mainGroup = web->MakeGroup("NetCast Settings");
 
-	BParameterGroup* serverGroup = mainGroup->MakeGroup("Server");
+	BParameterGroup* serverGroup = mainGroup->MakeGroup("Server Control");
 
 	BDiscreteParameter* enableParam = serverGroup->MakeDiscreteParameter(
-		P_SERVER_ENABLE, B_MEDIA_RAW_AUDIO, "Enable Server", B_ENABLE);
+		P_SERVER_ENABLE, B_MEDIA_NO_TYPE, "Enable Server", B_ENABLE);
 	enableParam->AddItem(0, "Disabled");
 	enableParam->AddItem(1, "Enabled");
 
-	if (!fServer.IsRunning()) {
-		serverGroup->MakeTextParameter(
-			P_SERVER_PORT, B_MEDIA_RAW_AUDIO, "Port: ", B_GENERIC, 16);
-	}
+	serverGroup->MakeTextParameter(
+		P_SERVER_PORT, B_MEDIA_NO_TYPE, "Port: ", B_GENERIC, 16);
 
-	if (fServer.IsRunning()) {
+	serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
+		"_________________________________________________", B_GENERIC);
+
+	serverGroup->MakeTextParameter(
+		P_STREAM_URL, B_MEDIA_NO_TYPE, "URL: ", B_GENERIC, 256);
+
+	if (fParametersChanged) {
+		serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "\n", B_GENERIC);
 		serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
-		"____________________________________________________________", B_GENERIC);
-		serverGroup->MakeTextParameter(
-			P_STREAM_URL, B_MEDIA_RAW_AUDIO, "URL: ", B_GENERIC, 256);
+			"Restart media services to apply changes", B_GENERIC);
 	}
 
-	if (!fServer.IsRunning() && !fConnected) {
-		BParameterGroup* encodingGroup = mainGroup->MakeGroup("Encoding");
+	BParameterGroup* encodingGroup = mainGroup->MakeGroup("Encoding");
 
-		BDiscreteParameter* codecParam = encodingGroup->MakeDiscreteParameter(
-			P_CODEC_TYPE, B_MEDIA_RAW_AUDIO, "Codec", B_GENERIC);
-
-		for (int32 i = 0; i < EncoderFactory::GetCodecCount(); i++) {
-			codecParam->AddItem(i, EncoderFactory::GetCodecName(
-				static_cast<EncoderFactory::CodecType>(i)));
-		}
+	BDiscreteParameter* codecParam = encodingGroup->MakeDiscreteParameter(
+		P_CODEC_TYPE, B_MEDIA_NO_TYPE, "Codec", B_GENERIC);
+	for (int32 i = 0; i < EncoderFactory::GetCodecCount(); i++) {
+		codecParam->AddItem(i, EncoderFactory::GetCodecName(
+			static_cast<EncoderFactory::CodecType>(i)));
+	}
 
 #ifdef HAVE_LAME
-		if (fCodecType == EncoderFactory::CODEC_MP3) {
-			BDiscreteParameter* bitrateParam = encodingGroup->MakeDiscreteParameter(
-				P_BITRATE, B_MEDIA_RAW_AUDIO, "Bitrate", B_GENERIC);
-			bitrateParam->AddItem(64, "64 kbps");
-			bitrateParam->AddItem(96, "96 kbps");
-			bitrateParam->AddItem(128, "128 kbps");
-			bitrateParam->AddItem(192, "192 kbps");
-			bitrateParam->AddItem(256, "256 kbps");
-			bitrateParam->AddItem(320, "320 kbps");
-		}
+	if (fCodecType == EncoderFactory::CODEC_MP3) {
+		BDiscreteParameter* bitrateParam = encodingGroup->MakeDiscreteParameter(
+			P_BITRATE, B_MEDIA_NO_TYPE, "Bitrate", B_GENERIC);
+		bitrateParam->AddItem(64, "64 kbps");
+		bitrateParam->AddItem(96, "96 kbps");
+		bitrateParam->AddItem(128, "128 kbps");
+		bitrateParam->AddItem(192, "192 kbps");
+		bitrateParam->AddItem(256, "256 kbps");
+		bitrateParam->AddItem(320, "320 kbps");
+	}
 #endif
 
-		BDiscreteParameter* chunkParam = encodingGroup->MakeDiscreteParameter(
-			P_CHUNK_SIZE, B_MEDIA_RAW_AUDIO, "Chunk Size (Latency)", B_GENERIC);
-		chunkParam->AddItem(10, "100 ms (Low CPU)");
-		chunkParam->AddItem(20, "50 ms (Normal)");
-		chunkParam->AddItem(40, "25 ms (Low Latency)");
-		chunkParam->AddItem(80, "12.5 ms (Ultra Low)");
-		chunkParam->AddItem(160, "6.25 ms (Extreme)");
+	BParameterGroup* formatGroup = mainGroup->MakeGroup("Audio Format");
+
+	BDiscreteParameter* rateParam = formatGroup->MakeDiscreteParameter(
+		P_SAMPLE_RATE, B_MEDIA_NO_TYPE, "Sample Rate", B_GENERIC);
+	for (size_t i = 0; i < sizeof(kSupportedSampleRates) / sizeof(kSupportedSampleRates[0]); i++) {
+		int32 rate = static_cast<int32>(kSupportedSampleRates[i]);
+		BString label;
+		label << rate << " Hz";
+		rateParam->AddItem(rate, label.String());
 	}
 
-	if (!fConnected) {
-		BParameterGroup* formatGroup = mainGroup->MakeGroup("Audio Format");
+	BDiscreteParameter* channelsParam = formatGroup->MakeDiscreteParameter(
+		P_CHANNELS, B_MEDIA_NO_TYPE, "Channels", B_GENERIC);
+	channelsParam->AddItem(1, "Mono");
+	channelsParam->AddItem(2, "Stereo");
 
-		BDiscreteParameter* rateParam = formatGroup->MakeDiscreteParameter(
-			P_SAMPLE_RATE, B_MEDIA_RAW_AUDIO, "Sample Rate", B_GENERIC);
-
-		for (size_t i = 0; i < sizeof(kSupportedSampleRates) / sizeof(kSupportedSampleRates[0]); i++) {
-			int32 rate = static_cast<int32>(kSupportedSampleRates[i]);
-			BString label;
-			label << rate << " Hz";
-			rateParam->AddItem(rate, label.String());
-		}
-
-		BDiscreteParameter* channelsParam = formatGroup->MakeDiscreteParameter(
-			P_CHANNELS, B_MEDIA_RAW_AUDIO, "Channels", B_GENERIC);
-		channelsParam->AddItem(1, "Mono");
-		channelsParam->AddItem(2, "Stereo");
-	}
+	BDiscreteParameter* chunkParam = formatGroup->MakeDiscreteParameter(
+		P_CHUNK_SIZE, B_MEDIA_NO_TYPE, "Chunk Size (Latency)", B_GENERIC);
+	chunkParam->AddItem(10, "100 ms (Low CPU)");
+	chunkParam->AddItem(20, "50 ms (Normal)");
+	chunkParam->AddItem(40, "25 ms (Low Latency)");
+	chunkParam->AddItem(80, "12.5 ms (Ultra Low)");
+	chunkParam->AddItem(160, "6.25 ms (Extreme)");
 
 	return web;
 }
@@ -1117,7 +1098,12 @@ NetCastNode::GetParameterValue(int32 id, bigtime_t* last_change,
 			return B_OK;
 
 		case P_STREAM_URL: {
-			BString url = fServer.GetStreamURL();
+			BString url;
+			if (fServer.IsRunning()) {
+				url = fServer.GetStreamURL();
+			} else {
+				url = "Server is not running";
+			}
 			if (*size < static_cast<size_t>(url.Length() + 1))
 				return B_NO_MEMORY;
 			strcpy(static_cast<char*>(value), url.String());
@@ -1140,17 +1126,33 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 	if (!value || size == 0)
 		return;
 
+	bool needsWebUpdate = false;
+
 	switch (id) {
 		case P_SERVER_PORT: {
-			if (fServer.IsRunning())
-				break;
-
 			const char* portStr = static_cast<const char*>(value);
 			int32 newPort = atoi(portStr);
 			if (newPort >= 1024 && newPort <= 65535 && newPort != fServerPort) {
 				TRACE_INFO("Port changed: %ld -> %ld", fServerPort, newPort);
+
+				bool wasRunning = fServer.IsRunning();
+
+				if (wasRunning) {
+					TRACE_INFO("Stopping server to change port");
+					fServer.Stop();
+				}
+
 				fServerPort = newPort;
 				fLastPortChange = when;
+
+				if (wasRunning) {
+					TRACE_INFO("Restarting server on new port %ld", newPort);
+					fServer.Start(fServerPort);
+				} else {
+					fParametersChanged = true;
+				}
+
+				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
 					BTimedEventQueue::B_PARAMETER, NULL,
@@ -1158,10 +1160,11 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 			}
 			break;
 		}
-		
+
 		case P_CODEC_TYPE: {
 			int32 newCodec = *static_cast<const int32*>(value);
-			if (newCodec >= 0 && newCodec < EncoderFactory::GetCodecCount()) {
+			if (newCodec >= 0 && newCodec < EncoderFactory::GetCodecCount() &&
+				newCodec != static_cast<int32>(fCodecType)) {
 				NetCastEncoder* newEncoder = EncoderFactory::CreateEncoder(
 					static_cast<EncoderFactory::CodecType>(newCodec));
 
@@ -1190,6 +1193,8 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 				}
 
 				fLastCodecChange = when;
+				fParametersChanged = true;
+				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
 					BTimedEventQueue::B_PARAMETER, NULL,
@@ -1204,6 +1209,9 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 				TRACE_INFO("Bitrate changed: %ld -> %ld", fBitrate, newBitrate);
 				fBitrate = newBitrate;
 				fLastBitrateChange = when;
+				fParametersChanged = true;
+				needsWebUpdate = true;
+
 				if (fConnected) {
 					UpdateEncoder();
 				}
@@ -1216,14 +1224,13 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 		}
 
 		case P_CHUNK_SIZE: {
-			if (fConnected)
-				break;
-
 			int32 newDivider = *static_cast<const int32*>(value);
 			if (newDivider >= 10 && newDivider <= 160 && newDivider != fChunkDivider) {
 				TRACE_INFO("Chunk divider changed: %ld -> %ld", fChunkDivider, newDivider);
 				fChunkDivider = newDivider;
 				fLastChunkSizeChange = when;
+				fParametersChanged = true;
+				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
 					BTimedEventQueue::B_PARAMETER, NULL,
@@ -1233,15 +1240,14 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 		}
 
 		case P_SAMPLE_RATE: {
-			if (fConnected)
-				break;
-
 			float newRate = static_cast<float>(*static_cast<const int32*>(value));
 			if (newRate != fPreferredSampleRate) {
 				TRACE_INFO("Sample rate changed: %.0f -> %.0f", fPreferredSampleRate, newRate);
 				fPreferredSampleRate = newRate;
 				fLastSampleRateChange = when;
 				fInput.format.u.raw_audio.frame_rate = newRate;
+				fParametersChanged = true;
+				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
 					BTimedEventQueue::B_PARAMETER, NULL,
@@ -1251,15 +1257,14 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 		}
 
 		case P_CHANNELS: {
-			if (fConnected)
-				break;
-
 			int32 newChannels = *static_cast<const int32*>(value);
 			if (newChannels >= 1 && newChannels <= 2 && newChannels != fPreferredChannels) {
 				TRACE_INFO("Channels changed: %ld -> %ld", fPreferredChannels, newChannels);
 				fPreferredChannels = newChannels;
 				fLastChannelsChange = when;
 				fInput.format.u.raw_audio.channel_count = newChannels;
+				fParametersChanged = true;
+				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
 					BTimedEventQueue::B_PARAMETER, NULL,
@@ -1288,6 +1293,13 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 			break;
 		}
 	}
+
+	if (needsWebUpdate) {
+		BParameterWeb* web = MakeParameterWeb();
+		SetParameterWeb(web);
+	}
+
+	SaveSettings();
 }
 
 status_t
