@@ -18,6 +18,8 @@ static const int32 kServerMaxClients = 10;
 static const bigtime_t kServerClientTimeout = 5000000;
 static const bigtime_t kServerAcceptTimeout = 1000000;
 static const int32 kServerHTTPBufferSize = 4096;
+static const float kSendBufferSeconds = 0.5f;
+static const int32 kMaxFailedSends = 10;
 
 class NetCastServer {
 public:
@@ -37,6 +39,8 @@ public:
 		BString				userAgent;
 		bool				headerSent;
 		bigtime_t			connectedTime;
+		int32				failedSendCount;
+		bigtime_t			lastSuccessfulSend;
 	};
 
 							NetCastServer();
@@ -47,7 +51,8 @@ public:
 	bool					IsRunning() const { return fServerRunning; }
 
 	void					BroadcastData(const uint8* data, size_t size);
-	void					SetStreamInfo(const char* mimeType, int32 bitrate);
+	void					SetStreamInfo(const char* mimeType, int32 bitrate,
+								float sampleRate, int32 channels);
 	void					SendHeaderToNewClients(const uint8* header, size_t headerSize);
 
 	BString					GetStreamURL() const { return fStreamURL; }
@@ -64,6 +69,7 @@ private:
 	void					SendHTTPResponse(BAbstractSocket* socket);
 	void					UpdateStreamURL();
 	void					CleanupClients();
+	int32					CalculateOptimalSendBuffer() const;
 
 	BSocket*				fServerSocket;
 	thread_id				fServerThread;
@@ -76,6 +82,8 @@ private:
 	BString					fStreamURL;
 	BString					fMimeType;
 	int32					fBitrate;
+	float					fSampleRate;
+	int32					fChannels;
 
 	uint8*					fStreamHeader;
 	size_t					fStreamHeaderSize;

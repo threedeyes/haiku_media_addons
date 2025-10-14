@@ -25,6 +25,8 @@ NetCastServer::NetCastServer()
 	  fServerPort(0),
 	  fMimeType("audio/wav"),
 	  fBitrate(128),
+	  fSampleRate(44100.0f),
+	  fChannels(2),
 	  fStreamHeader(NULL),
 	  fStreamHeaderSize(0),
 	  fListener(NULL)
@@ -156,58 +158,91 @@ NetCastServer::BroadcastData(const uint8* data, size_t size)
 	if (!fClientsLock.Lock())
 		return;
 
+	bigtime_t now = system_time();
+
 	for (int32 i = fClients.CountItems() - 1; i >= 0; i--) {
 		ClientInfo* client = static_cast<ClientInfo*>(fClients.ItemAt(i));
 		if (!client || !client->socket)
 			continue;
 
+		bool shouldDisconnect = false;
+
 		if (!client->headerSent && fStreamHeader && fStreamHeaderSize > 0) {
 			fHeaderLock.Lock();
-			ssize_t sent = client->socket->Write(fStreamHeader, fStreamHeaderSize);
+			ssize_t headerSent = client->socket->Write(fStreamHeader, fStreamHeaderSize);
 			fHeaderLock.Unlock();
 
-			if (sent == static_cast<ssize_t>(fStreamHeaderSize)) {
+			if (headerSent == static_cast<ssize_t>(fStreamHeaderSize)) {
 				client->headerSent = true;
-				TRACE_VERBOSE("Sent header to client %s", client->address.String());
-			} else if (sent < 0 && errno != EWOULDBLOCK && errno != EAGAIN) {
-				TRACE_WARNING("Failed to send header to %s: %s",
-					client->address.String(), strerror(errno));
+				client->lastSuccessfulSend = now;
+				TRACE_INFO("Sent complete header to %s", client->address.String());
+			} else if (headerSent < 0) {
+				if (errno == EWOULDBLOCK || errno == EAGAIN) {
+					TRACE_WARNING("Header send blocked for %s, disconnecting (buffer too small)",
+						client->address.String());
+				} else {
+					TRACE_WARNING("Header send failed for %s: %s",
+						client->address.String(), strerror(errno));
+				}
+				shouldDisconnect = true;
+			} else {
+				TRACE_ERROR("Partial header send (%ld/%lu) to %s, disconnecting",
+					headerSent, fStreamHeaderSize, client->address.String());
+				shouldDisconnect = true;
+			}
+
+			if (shouldDisconnect) {
+				TRACE_INFO("Disconnecting client %s (header problem)", client->address.String());
+				if (fListener)
+					fListener->OnClientDisconnected(client->address.String());
 				delete client->socket;
 				fClients.RemoveItem(i);
 				delete client;
-				if (fListener)
-					fListener->OnClientDisconnected(client->address.String());
 				continue;
 			}
+
+			continue;
 		}
 
 		ssize_t sent = client->socket->Write(data, size);
 
-		bool shouldDisconnect = false;
-
-		if (sent < 0) {
+		if (sent == static_cast<ssize_t>(size)) {
+			client->failedSendCount = 0;
+			client->lastSuccessfulSend = now;
+		} else if (sent < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
-				TRACE_VERBOSE("Client %s buffer full, would block",
-					client->address.String());
+				client->failedSendCount++;
+				TRACE_VERBOSE("Client %s buffer full (failed %ld times)",
+					client->address.String(), client->failedSendCount);
+
+				if (client->failedSendCount >= kMaxFailedSends) {
+					TRACE_WARNING("Client %s too slow, disconnecting (%ld consecutive failures)",
+						client->address.String(), client->failedSendCount);
+					shouldDisconnect = true;
+				}
 			} else {
-				TRACE_WARNING("Write error for client %s: %s",
+				TRACE_WARNING("Write error for %s: %s",
 					client->address.String(), strerror(errno));
 				shouldDisconnect = true;
 			}
 		} else if (sent == 0) {
-			TRACE_WARNING("Connection closed for client %s",
-				client->address.String());
+			TRACE_WARNING("Connection closed for %s", client->address.String());
 			shouldDisconnect = true;
 		} else if (sent < static_cast<ssize_t>(size)) {
-			TRACE_VERBOSE("Client %s partial write: %ld of %lu bytes",
-				client->address.String(), sent, size);
+			client->failedSendCount++;
+			TRACE_VERBOSE("Partial write to %s: %ld/%lu (failed %ld times)",
+				client->address.String(), sent, size, client->failedSendCount);
+
+			if (client->failedSendCount >= kMaxFailedSends) {
+				TRACE_WARNING("Client %s too slow, disconnecting", client->address.String());
+				shouldDisconnect = true;
+			}
 		}
 
 		if (shouldDisconnect) {
 			TRACE_INFO("Disconnecting client %s", client->address.String());
 			if (fListener)
 				fListener->OnClientDisconnected(client->address.String());
-
 			delete client->socket;
 			fClients.RemoveItem(i);
 			delete client;
@@ -218,11 +253,52 @@ NetCastServer::BroadcastData(const uint8* data, size_t size)
 }
 
 void
-NetCastServer::SetStreamInfo(const char* mimeType, int32 bitrate)
+NetCastServer::SetStreamInfo(const char* mimeType, int32 bitrate,
+	float sampleRate, int32 channels)
 {
-	TRACE_INFO("Stream info updated: %s, %ld kbps", mimeType, bitrate);
+	TRACE_CALL("mime=%s, bitrate=%ld, sampleRate=%.0f, channels=%ld",
+		mimeType, bitrate, sampleRate, channels);
+
 	fMimeType = mimeType;
 	fBitrate = bitrate;
+	fSampleRate = sampleRate;
+	fChannels = channels;
+
+	TRACE_INFO("Stream format: %s, %ld kbps, %.0f Hz, %ld ch",
+		mimeType, bitrate, sampleRate, channels);
+}
+
+int32
+NetCastServer::CalculateOptimalSendBuffer() const
+{
+	int32 bufferSize;
+
+	if (fMimeType == "audio/wav") {
+		bufferSize = static_cast<int32>(
+			fSampleRate * fChannels * 2 * kSendBufferSeconds
+		);
+		TRACE_INFO("PCM buffer: %.0f Hz × %ld ch × 2 × %.1f sec = %ld bytes (%.1f KB)",
+			fSampleRate, fChannels, kSendBufferSeconds, bufferSize, bufferSize / 1024.0f);
+	} else if (fMimeType == "audio/mpeg") {
+		bufferSize = (fBitrate * 1024 / 8) * static_cast<int32>(kSendBufferSeconds);
+		TRACE_INFO("MP3 buffer: %ld kbps × %.1f sec = %ld bytes (%.1f KB)",
+			fBitrate, kSendBufferSeconds, bufferSize, bufferSize / 1024.0f);
+	} else {
+		bufferSize = 65536;
+		TRACE_WARNING("Unknown format '%s', using default buffer: %ld bytes",
+			fMimeType.String(), bufferSize);
+	}
+
+	const int32 MIN_BUFFER = 8192;
+	const int32 MAX_BUFFER = 524288;
+
+	if (bufferSize < MIN_BUFFER)
+		bufferSize = MIN_BUFFER;
+
+	if (bufferSize > MAX_BUFFER)
+		bufferSize = MAX_BUFFER;
+
+	return bufferSize;
 }
 
 void
@@ -394,9 +470,9 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 
 	int sockfd = clientSocket->Socket();
 
-	int sndbuf = 8192;
+	int sndbuf = CalculateOptimalSendBuffer();
 	if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0) {
-		TRACE_VERBOSE("Send buffer reduced to %d bytes for low latency", sndbuf);
+		TRACE_INFO("Socket send buffer: %d KB", sndbuf / 1024);
 	} else {
 		TRACE_WARNING("Failed to set SO_SNDBUF: %s", strerror(errno));
 	}
@@ -416,7 +492,7 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 
 	int nodelay = 1;
 	if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay)) == 0) {
-		TRACE_VERBOSE("TCP_NODELAY enabled for low latency");
+		TRACE_VERBOSE("TCP_NODELAY enabled");
 	} else {
 		TRACE_WARNING("Failed to enable TCP_NODELAY: %s", strerror(errno));
 	}
@@ -432,6 +508,8 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	info->userAgent = userAgent;
 	info->headerSent = false;
 	info->connectedTime = system_time();
+	info->failedSendCount = 0;
+	info->lastSuccessfulSend = system_time();
 
 	fClientsLock.Lock();
 	fClients.AddItem(info);

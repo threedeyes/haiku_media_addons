@@ -680,9 +680,10 @@ NetCastNode::UpdateEncoder()
 	}
 	
 	const char* mimeType = fEncoder ? fEncoder->MimeType() : "audio/wav";
-	fServer.SetStreamInfo(mimeType, fBitrate);
+	fServer.SetStreamInfo(mimeType, fBitrate, fmt.frame_rate, fmt.channel_count);
 
-	TRACE_INFO("Stream MIME type: %s", mimeType);
+	TRACE_INFO("Stream info updated: %s @ %ld kbps, %.0f Hz, %ld ch",
+		mimeType, fBitrate, fmt.frame_rate, fmt.channel_count);
 
 	if (fCodecType == EncoderFactory::CODEC_PCM && fWAVHeader) {
 		PrepareWAVHeader();
