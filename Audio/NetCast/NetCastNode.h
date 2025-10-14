@@ -22,10 +22,17 @@
 
 static const int32 kDefaultPort = 8000;
 static const int32 kDefaultBitrate = 128;
-static const int32 kDefaultBufferSize = 2048;
+static const int32 kDefaultChunkDivider = 20;
 static const float kDefaultSampleRate = 44100.0f;
 static const int32 kDefaultChannels = 2;
 static const int32 kWAVHeaderSize = 44;
+
+static const float kSupportedSampleRates[] = {
+	11025.0f,
+	22050.0f,
+	44100.0f,
+	48000.0f
+};
 
 class NetCastNode : public BBufferConsumer,
 					 public BMediaEventLooper,
@@ -88,7 +95,7 @@ private:
 		P_SERVER_PORT,
 		P_CODEC_TYPE,
 		P_BITRATE,
-		P_BUFFER_SIZE,
+		P_CHUNK_SIZE,
 		P_SAMPLE_RATE,
 		P_CHANNELS,
 		P_STREAM_URL
@@ -102,6 +109,7 @@ private:
 	void					UpdateEncoder();
 	void					PrepareWAVHeader();
 	void					HandleParameter(uint32 parameter);
+	bool					IsSampleRateSupported(float rate) const;
 
 	status_t				LoadSettings();
 	status_t				SaveSettings();
@@ -131,14 +139,14 @@ private:
 
 	int32					fServerPort;
 	int32					fBitrate;
-	int32					fBufferSize;
+	int32					fChunkDivider;
 	float					fPreferredSampleRate;
 	int32					fPreferredChannels;
 
 	bigtime_t				fLastPortChange;
 	bigtime_t				fLastCodecChange;
 	bigtime_t				fLastBitrateChange;
-	bigtime_t				fLastBufferSizeChange;
+	bigtime_t				fLastChunkSizeChange;
 	bigtime_t				fLastSampleRateChange;
 	bigtime_t				fLastChannelsChange;
 	bigtime_t				fLastServerEnableChange;

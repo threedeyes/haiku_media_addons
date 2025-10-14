@@ -41,13 +41,13 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 	  fServerEnabled(false),
 	  fServerPort(kDefaultPort),
 	  fBitrate(kDefaultBitrate),
-	  fBufferSize(kDefaultBufferSize),
+	  fChunkDivider(kDefaultChunkDivider),
 	  fPreferredSampleRate(kDefaultSampleRate),
 	  fPreferredChannels(kDefaultChannels),
 	  fLastPortChange(0),
 	  fLastCodecChange(0),
 	  fLastBitrateChange(0),
-	  fLastBufferSizeChange(0),
+	  fLastChunkSizeChange(0),
 	  fLastSampleRateChange(0),
 	  fLastChannelsChange(0),
 	  fLastServerEnableChange(0),
@@ -75,9 +75,9 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 			TRACE_VERBOSE("Config: bitrate=%ld", value);
 		}
 
-		if (config->FindInt32("buffer_size", &value) == B_OK) {
-			fBufferSize = value;
-			TRACE_VERBOSE("Config: buffer_size=%ld", value);
+		if (config->FindInt32("chunk_divider", &value) == B_OK) {
+			fChunkDivider = value;
+			TRACE_VERBOSE("Config: chunk_divider=%ld", value);
 		}
 
 		float floatValue;
@@ -105,7 +105,7 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 		}
 	}
 
-	SetEventLatency(10000);
+	SetEventLatency(5000);
 
 	fEncoder = EncoderFactory::CreateEncoder(fCodecType);
 	if (!fEncoder) {
@@ -113,7 +113,7 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 		fEncoder = EncoderFactory::CreateEncoder(EncoderFactory::CODEC_PCM);
 	}
 
-	fOutputBufferSize = fBufferSize;
+	fOutputBufferSize = 16384;
 	fOutputBuffer = new(std::nothrow) uint8[fOutputBufferSize];
 	if (!fOutputBuffer) {
 		TRACE_ERROR("Failed to allocate output buffer of size %lu", fOutputBufferSize);
@@ -126,8 +126,8 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 
 	fServer.SetListener(this);
 
-	TRACE_INFO("NetCastNode created: port=%ld, codec=%d, bitrate=%ld",
-		fServerPort, fCodecType, fBitrate);
+	TRACE_INFO("NetCastNode created: port=%ld, codec=%d, bitrate=%ld, chunk_divider=%ld",
+		fServerPort, fCodecType, fBitrate, fChunkDivider);
 }
 
 NetCastNode::~NetCastNode()
@@ -163,7 +163,7 @@ NetCastNode::InitDefaults()
 	fServerEnabled = false;
 	fServerPort = kDefaultPort;
 	fBitrate = kDefaultBitrate;
-	fBufferSize = kDefaultBufferSize;
+	fChunkDivider = kDefaultChunkDivider;
 	fPreferredSampleRate = kDefaultSampleRate;
 	fPreferredChannels = kDefaultChannels;
 	fCodecType = EncoderFactory::CODEC_PCM;
@@ -171,7 +171,7 @@ NetCastNode::InitDefaults()
 	fLastPortChange = 0;
 	fLastCodecChange = 0;
 	fLastBitrateChange = 0;
-	fLastBufferSizeChange = 0;
+	fLastChunkSizeChange = 0;
 	fLastSampleRateChange = 0;
 	fLastChannelsChange = 0;
 	fLastServerEnableChange = 0;
@@ -260,6 +260,16 @@ NetCastNode::HandleMessage(int32 message, const void* data, size_t size)
 	return B_ERROR;
 }
 
+bool
+NetCastNode::IsSampleRateSupported(float rate) const
+{
+	for (size_t i = 0; i < sizeof(kSupportedSampleRates) / sizeof(kSupportedSampleRates[0]); i++) {
+		if (rate == kSupportedSampleRates[i])
+			return true;
+	}
+	return false;
+}
+
 status_t
 NetCastNode::AcceptFormat(const media_destination& dest, media_format* format)
 {
@@ -286,11 +296,7 @@ NetCastNode::AcceptFormat(const media_destination& dest, media_format* format)
 	if (raw.channel_count == media_raw_audio_format::wildcard.channel_count)
 		raw.channel_count = fPreferredChannels;
 
-	if (raw.frame_rate != 8000.0f && raw.frame_rate != 11025.0f &&
-		raw.frame_rate != 16000.0f && raw.frame_rate != 22050.0f &&
-		raw.frame_rate != 24000.0f && raw.frame_rate != 32000.0f &&
-		raw.frame_rate != 44100.0f && raw.frame_rate != 48000.0f &&
-		raw.frame_rate != 88200.0f && raw.frame_rate != 96000.0f) {
+	if (!IsSampleRateSupported(raw.frame_rate)) {
 		TRACE_WARNING("Unsupported sample rate %.0f, using %.0f",
 			raw.frame_rate, fPreferredSampleRate);
 		raw.frame_rate = fPreferredSampleRate;
@@ -321,14 +327,15 @@ NetCastNode::AcceptFormat(const media_destination& dest, media_format* format)
 	if (raw.byte_order == media_raw_audio_format::wildcard.byte_order)
 		raw.byte_order = B_MEDIA_HOST_ENDIAN;
 	
-	if (raw.buffer_size == media_raw_audio_format::wildcard.buffer_size) {
-		raw.buffer_size = static_cast<int32>(raw.frame_rate / 20.0f) *
-						 raw.channel_count *
-						 (raw.format == media_raw_audio_format::B_AUDIO_FLOAT ? 4 : 2);
-	}
+	raw.buffer_size = static_cast<int32>(raw.frame_rate / fChunkDivider) *
+					 raw.channel_count *
+					 (raw.format == media_raw_audio_format::B_AUDIO_FLOAT ? 4 : 2);
 
-	TRACE_INFO("Accepted format: %.0f Hz, %ld ch, format=%ld",
-		raw.frame_rate, raw.channel_count, raw.format);
+	float latencyMs = (1000.0f / raw.frame_rate) * (raw.buffer_size / raw.channel_count /
+		(raw.format == media_raw_audio_format::B_AUDIO_FLOAT ? 4 : 2));
+
+	TRACE_INFO("Accepted format: %.0f Hz, %ld ch, format=%ld, buffer=%ld (~%.1fms)",
+		raw.frame_rate, raw.channel_count, raw.format, raw.buffer_size, latencyMs);
 	
 	return B_OK;
 }
@@ -486,7 +493,7 @@ NetCastNode::HandleParameter(uint32 parameter)
 		case P_SERVER_PORT:
 		case P_CODEC_TYPE:
 		case P_BITRATE:
-		case P_BUFFER_SIZE:
+		case P_CHUNK_SIZE:
 		case P_SAMPLE_RATE:
 		case P_CHANNELS:
 		{
@@ -732,7 +739,7 @@ NetCastNode::UpdateEncoder()
 		fmt.frame_rate, fmt.channel_count >= 2 ? 2 : 1, fBitrate);
 
 	int32 recommendedSize = fEncoder->RecommendedBufferSize(
-		static_cast<int32>(fmt.frame_rate / 20.0f));
+		static_cast<int32>(fmt.frame_rate / fChunkDivider));
 
 	if (recommendedSize > static_cast<int32>(fOutputBufferSize)) {
 		delete[] fOutputBuffer;
@@ -892,22 +899,22 @@ NetCastNode::LoadSettings()
 		}
 	}
 
-	if (settings.FindInt32("buffer_size", &value) == B_OK) {
-		if (value >= 1024 && value <= 65536) {
-			fBufferSize = value;
-			TRACE_VERBOSE("Loaded buffer_size: %ld", value);
+	if (settings.FindInt32("chunk_divider", &value) == B_OK) {
+		if (value >= 10 && value <= 160) {
+			fChunkDivider = value;
+			TRACE_VERBOSE("Loaded chunk_divider: %ld", value);
 		}
 	}
 
 	if (settings.FindInt32("sample_rate", &value) == B_OK) {
-		if (value > 0 && value <= 192000) {
+		if (IsSampleRateSupported(static_cast<float>(value))) {
 			fPreferredSampleRate = static_cast<float>(value);
 			TRACE_VERBOSE("Loaded sample_rate: %ld", value);
 		}
 	}
 
 	if (settings.FindInt32("channels", &value) == B_OK) {
-		if (value >= 1 && value <= 8) {
+		if (value >= 1 && value <= 2) {
 			fPreferredChannels = value;
 			TRACE_VERBOSE("Loaded channels: %ld", value);
 		}
@@ -940,7 +947,7 @@ NetCastNode::SaveSettings()
 	settings.AddInt32("port", fServerPort);
 	settings.AddInt32("codec", static_cast<int32>(fCodecType));
 	settings.AddInt32("bitrate", fBitrate);
-	settings.AddInt32("buffer_size", fBufferSize);
+	settings.AddInt32("chunk_divider", fChunkDivider);
 	settings.AddInt32("sample_rate", static_cast<int32>(fPreferredSampleRate));
 	settings.AddInt32("channels", fPreferredChannels);
 	settings.AddBool("server_enabled", fServerEnabled);
@@ -984,7 +991,7 @@ NetCastNode::MakeParameterWeb()
 			P_STREAM_URL, B_MEDIA_RAW_AUDIO, "URL: ", B_GENERIC, 256);
 	}
 
-	if (!fServer.IsRunning()) {
+	if (!fServer.IsRunning() && !fConnected) {
 		BParameterGroup* encodingGroup = mainGroup->MakeGroup("Encoding");
 
 		BDiscreteParameter* codecParam = encodingGroup->MakeDiscreteParameter(
@@ -1008,14 +1015,13 @@ NetCastNode::MakeParameterWeb()
 		}
 #endif
 
-		BDiscreteParameter* bufferParam = encodingGroup->MakeDiscreteParameter(
-			P_BUFFER_SIZE, B_MEDIA_RAW_AUDIO, "Buffer Size", B_GENERIC);
-		bufferParam->AddItem(1024, "1 KB");
-		bufferParam->AddItem(2048, "2 KB");
-		bufferParam->AddItem(4096, "4 KB");
-		bufferParam->AddItem(8192, "8 KB");
-		bufferParam->AddItem(16384, "16 KB");
-		bufferParam->AddItem(32768, "32 KB");
+		BDiscreteParameter* chunkParam = encodingGroup->MakeDiscreteParameter(
+			P_CHUNK_SIZE, B_MEDIA_RAW_AUDIO, "Chunk Size (Latency)", B_GENERIC);
+		chunkParam->AddItem(10, "100 ms (Low CPU)");
+		chunkParam->AddItem(20, "50 ms (Normal)");
+		chunkParam->AddItem(40, "25 ms (Low Latency)");
+		chunkParam->AddItem(80, "12.5 ms (Ultra Low)");
+		chunkParam->AddItem(160, "6.25 ms (Extreme)");
 	}
 
 	if (!fConnected) {
@@ -1023,10 +1029,13 @@ NetCastNode::MakeParameterWeb()
 
 		BDiscreteParameter* rateParam = formatGroup->MakeDiscreteParameter(
 			P_SAMPLE_RATE, B_MEDIA_RAW_AUDIO, "Sample Rate", B_GENERIC);
-		rateParam->AddItem(11025, "11025 Hz");
-		rateParam->AddItem(22050, "22050 Hz");
-		rateParam->AddItem(44100, "44100 Hz");
-		rateParam->AddItem(48000, "48000 Hz");
+
+		for (size_t i = 0; i < sizeof(kSupportedSampleRates) / sizeof(kSupportedSampleRates[0]); i++) {
+			int32 rate = static_cast<int32>(kSupportedSampleRates[i]);
+			BString label;
+			label << rate << " Hz";
+			rateParam->AddItem(rate, label.String());
+		}
 
 		BDiscreteParameter* channelsParam = formatGroup->MakeDiscreteParameter(
 			P_CHANNELS, B_MEDIA_RAW_AUDIO, "Channels", B_GENERIC);
@@ -1075,12 +1084,12 @@ NetCastNode::GetParameterValue(int32 id, bigtime_t* last_change,
 			*last_change = fLastBitrateChange;
 			return B_OK;
 
-		case P_BUFFER_SIZE:
+		case P_CHUNK_SIZE:
 			if (*size < sizeof(int32))
 				return B_NO_MEMORY;
-			*static_cast<int32*>(value) = fBufferSize;
+			*static_cast<int32*>(value) = fChunkDivider;
 			*size = sizeof(int32);
-			*last_change = fLastBufferSizeChange;
+			*last_change = fLastChunkSizeChange;
 			return B_OK;
 
 		case P_SAMPLE_RATE:
@@ -1151,9 +1160,6 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 		}
 		
 		case P_CODEC_TYPE: {
-			if (fServer.IsRunning())
-				break;
-
 			int32 newCodec = *static_cast<const int32*>(value);
 			if (newCodec >= 0 && newCodec < EncoderFactory::GetCodecCount()) {
 				NetCastEncoder* newEncoder = EncoderFactory::CreateEncoder(
@@ -1193,9 +1199,6 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 		}
 
 		case P_BITRATE: {
-			if (fServer.IsRunning())
-				break;
-
 			int32 newBitrate = *static_cast<const int32*>(value);
 			if (newBitrate >= 32 && newBitrate <= 320 && newBitrate != fBitrate) {
 				TRACE_INFO("Bitrate changed: %ld -> %ld", fBitrate, newBitrate);
@@ -1212,20 +1215,15 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 			break;
 		}
 
-		case P_BUFFER_SIZE: {
-			if (fServer.IsRunning())
+		case P_CHUNK_SIZE: {
+			if (fConnected)
 				break;
 
-			int32 newSize = *static_cast<const int32*>(value);
-			if (newSize >= 1024 && newSize <= 65536 && newSize != fBufferSize) {
-				TRACE_INFO("Buffer size changed: %ld -> %ld", fBufferSize, newSize);
-				fBufferSize = newSize;
-				fLastBufferSizeChange = when;
-				if (newSize > static_cast<int32>(fOutputBufferSize)) {
-					delete[] fOutputBuffer;
-					fOutputBufferSize = newSize;
-					fOutputBuffer = new(std::nothrow) uint8[fOutputBufferSize];
-				}
+			int32 newDivider = *static_cast<const int32*>(value);
+			if (newDivider >= 10 && newDivider <= 160 && newDivider != fChunkDivider) {
+				TRACE_INFO("Chunk divider changed: %ld -> %ld", fChunkDivider, newDivider);
+				fChunkDivider = newDivider;
+				fLastChunkSizeChange = when;
 
 				EventQueue()->AddEvent(media_timed_event(when,
 					BTimedEventQueue::B_PARAMETER, NULL,
