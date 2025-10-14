@@ -11,7 +11,8 @@
 #include "NetCastDebug.h"
 
 NetCastAddOn::NetCastAddOn(image_id image)
-	: BMediaAddOn(image)
+	: BMediaAddOn(image),
+	  fAddOnImage(image)
 {
 	TRACE_CALL("image_id=%ld", image);
 
@@ -77,7 +78,7 @@ NetCastAddOn::InstantiateNodeFor(const flavor_info* info,
 	if (out_error)
 		*out_error = B_OK;
 
-	BMediaNode* node = new NetCastNode(this, config);
+	BMediaNode* node = new NetCastNode(this, config, fAddOnImage);
 	TRACE_INFO("NetCastNode instantiated: %p", node);
 
 	return node;

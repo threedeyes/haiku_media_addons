@@ -18,7 +18,7 @@ static const int32 kServerMaxClients = 10;
 static const bigtime_t kServerClientTimeout = 5000000;
 static const bigtime_t kServerAcceptTimeout = 1000000;
 static const int32 kServerHTTPBufferSize = 4096;
-static const float kSendBufferSeconds = 0.5f;
+static const float kSendBufferSeconds = 2.0f;
 static const int32 kMaxFailedSends = 10;
 
 class NetCastServer {
@@ -60,6 +60,7 @@ public:
 	int32					GetPort() const { return fServerPort; }
 
 	void					SetListener(Listener* listener) { fListener = listener; }
+	void					SetAddOnImage(image_id image) { fAddOnImage = image; }
 
 private:
 	static int32			_ServerThread(void* data);
@@ -67,9 +68,14 @@ private:
 	void					HandleClient(BAbstractSocket* clientSocket);
 	bool					ParseHTTPRequest(const char* request, BString& path, BString& userAgent);
 	void					SendHTTPResponse(BAbstractSocket* socket);
+	void					SendHTMLPage(BAbstractSocket* socket);
+	void					SendResourceFile(BAbstractSocket* socket, const char* resourceName);
 	void					UpdateStreamURL();
 	void					CleanupClients();
 	int32					CalculateOptimalSendBuffer() const;
+	BString					LoadHTMLTemplate();
+	BString					ReplaceTemplatePlaceholders(const BString& html);
+	const char*				GetMimeType(const char* filename);
 
 	BSocket*				fServerSocket;
 	thread_id				fServerThread;
@@ -90,6 +96,7 @@ private:
 	BLocker					fHeaderLock;
 
 	Listener*				fListener;
+	image_id				fAddOnImage;
 };
 
 #endif

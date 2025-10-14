@@ -6,6 +6,9 @@
 
 #include <NetworkInterface.h>
 #include <NetworkRoster.h>
+#include <Resources.h>
+#include <File.h>
+#include <image.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -29,7 +32,8 @@ NetCastServer::NetCastServer()
 	  fChannels(2),
 	  fStreamHeader(NULL),
 	  fStreamHeaderSize(0),
-	  fListener(NULL)
+	  fListener(NULL),
+	  fAddOnImage(-1)
 {
 	TRACE_CALL("");
 }
@@ -301,6 +305,170 @@ NetCastServer::CalculateOptimalSendBuffer() const
 	return bufferSize;
 }
 
+BString
+NetCastServer::LoadHTMLTemplate()
+{
+	BString html;
+
+	if (fAddOnImage < 0) {
+		TRACE_ERROR("Invalid add-on image ID");
+		return html;
+	}
+
+	image_info imageInfo;
+	if (get_image_info(fAddOnImage, &imageInfo) != B_OK) {
+		TRACE_ERROR("Failed to get image info for image_id %ld", fAddOnImage);
+		return html;
+	}
+
+	BFile file(imageInfo.name, B_READ_ONLY);
+	if (file.InitCheck() != B_OK) {
+		TRACE_ERROR("Failed to open add-on file: %s", imageInfo.name);
+		return html;
+	}
+
+	BResources resources;
+	if (resources.SetTo(&file) != B_OK) {
+		TRACE_ERROR("Failed to load resources from: %s", imageInfo.name);
+		return html;
+	}
+
+	size_t size;
+	const char* data = (const char*)resources.LoadResource('FILE', "player.html", &size);
+	if (!data) {
+		TRACE_ERROR("Failed to load HTML template resource");
+		return html;
+	}
+
+	html.SetTo(data, size);
+	TRACE_INFO("Loaded HTML template from add-on: %lu bytes", size);
+
+	return html;
+}
+
+BString
+NetCastServer::ReplaceTemplatePlaceholders(const BString& html)
+{
+	BString result = html;
+
+	result.ReplaceAll("{{MIME_TYPE}}", fMimeType);
+
+	BString formatName = (fMimeType == "audio/wav") ? "PCM/WAV" : "MP3";
+	result.ReplaceAll("{{FORMAT_NAME}}", formatName);
+
+	BString qualityInfo;
+	if (fMimeType == "audio/wav") {
+		qualityInfo << static_cast<int>(fSampleRate / 1000) << " kHz / "
+					<< (fChannels == 2 ? "Stereo" : "Mono");
+	} else {
+		qualityInfo << fBitrate << " kbps";
+	}
+	result.ReplaceAll("{{QUALITY_INFO}}", qualityInfo);
+
+	return result;
+}
+
+const char*
+NetCastServer::GetMimeType(const char* filename)
+{
+	if (strstr(filename, ".svg"))
+		return "image/svg+xml";
+	if (strstr(filename, ".html"))
+		return "text/html";
+	if (strstr(filename, ".css"))
+		return "text/css";
+	if (strstr(filename, ".js"))
+		return "application/javascript";
+	return "application/octet-stream";
+}
+
+void
+NetCastServer::SendResourceFile(BAbstractSocket* socket, const char* resourceName)
+{
+	TRACE_VERBOSE("Sending resource: %s", resourceName);
+
+	if (fAddOnImage < 0) {
+		TRACE_ERROR("Invalid add-on image ID");
+		BString error = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+		socket->Write(error.String(), error.Length());
+		return;
+	}
+
+	image_info imageInfo;
+	if (get_image_info(fAddOnImage, &imageInfo) != B_OK) {
+		TRACE_ERROR("Failed to get image info");
+		BString error = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+		socket->Write(error.String(), error.Length());
+		return;
+	}
+
+	BFile file(imageInfo.name, B_READ_ONLY);
+	if (file.InitCheck() != B_OK) {
+		TRACE_ERROR("Failed to open add-on file");
+		BString error = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+		socket->Write(error.String(), error.Length());
+		return;
+	}
+
+	BResources resources;
+	if (resources.SetTo(&file) != B_OK) {
+		TRACE_ERROR("Failed to load resources");
+		BString error = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+		socket->Write(error.String(), error.Length());
+		return;
+	}
+
+	size_t size;
+	const char* data = (const char*)resources.LoadResource('FILE', resourceName, &size);
+	if (!data) {
+		TRACE_ERROR("Failed to load resource %s", resourceName);
+		BString error = "HTTP/1.1 404 Not Found\r\n\r\n";
+		socket->Write(error.String(), error.Length());
+		return;
+	}
+
+	BString response;
+	response << "HTTP/1.1 200 OK\r\n"
+			 << "Content-Type: " << GetMimeType(resourceName) << "\r\n"
+			 << "Content-Length: " << size << "\r\n"
+			 << "Cache-Control: public, max-age=86400\r\n"
+			 << "Connection: close\r\n"
+			 << "\r\n";
+
+	socket->Write(response.String(), response.Length());
+	socket->Write(data, size);
+
+	TRACE_INFO("Sent resource %s: %lu bytes", resourceName, size);
+}
+
+void
+NetCastServer::SendHTMLPage(BAbstractSocket* socket)
+{
+	TRACE_VERBOSE("Sending HTML page");
+
+	BString htmlTemplate = LoadHTMLTemplate();
+	if (htmlTemplate.Length() == 0) {
+		TRACE_ERROR("HTML template is empty, sending error page");
+		BString error = "HTTP/1.1 500 Internal Server Error\r\n"
+						"Content-Type: text/plain\r\n\r\n"
+						"Failed to load HTML template from add-on resources";
+		socket->Write(error.String(), error.Length());
+		return;
+	}
+
+	BString html = ReplaceTemplatePlaceholders(htmlTemplate);
+	BString response;
+	response << "HTTP/1.1 200 OK\r\n"
+			 << "Content-Type: text/html; charset=utf-8\r\n"
+			 << "Connection: close\r\n"
+			 << "Cache-Control: no-cache\r\n"
+			 << "Content-Length: " << html.Length() << "\r\n"
+			 << "\r\n"
+			 << html;
+
+	socket->Write(response.String(), response.Length());
+}
+
 void
 NetCastServer::SendHeaderToNewClients(const uint8* header, size_t headerSize)
 {
@@ -451,6 +619,19 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 						   "Connection: close\r\n\r\n"
 						   "Invalid HTTP request\n";
 		clientSocket->Write(response.String(), response.Length());
+		delete clientSocket;
+		return;
+	}
+
+	if (path == "/" || path == "/index.html") {
+		SendHTMLPage(clientSocket);
+		delete clientSocket;
+		return;
+	}
+
+	if (path.StartsWith("/resource/")) {
+		BString resourceName = path.String() + 10;
+		SendResourceFile(clientSocket, resourceName.String());
 		delete clientSocket;
 		return;
 	}

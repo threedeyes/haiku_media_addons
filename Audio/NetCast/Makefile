@@ -7,6 +7,8 @@ SRCS = \
 	NetCastEncoder.cpp \
 	NetCastServer.cpp
 
+RDEFS = Resources.rdef
+
 LIBS = be media network bnetapi mp3lame $(STDCPPLIBS)
 OPTIMIZE := FULL
 #DEFINES = HAVE_LAME=1 DEBUG=1 DEBUG_LEVEL=5

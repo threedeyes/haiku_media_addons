@@ -23,6 +23,7 @@ public:
 private:
 	media_format			fFormat;
 	flavor_info				fInfo;
+	image_id				fAddOnImage;
 };
 
 extern "C" _EXPORT BMediaAddOn* make_media_addon(image_id image);

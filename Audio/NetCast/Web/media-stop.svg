@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<svg version="1.1" width="64" height="64" color-interpolation="linearRGB"
+     xmlns:svg="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg">
+ <g>
+  <path style="fill:none; stroke:#000000; stroke-opacity:0.4; stroke-width:4; stroke-linecap:round; stroke-linejoin:round"
+        d="M42 42C42 29.33 42 16.66 42 4C29.33 4 16.66 4 4 4C4 16.66 4 29.33 4 42C16.66 42 29.33 42 42 42V42V42z"
+        transform="matrix(1.3409,0,0,1.3409,4,4)"
+  />
+  <path style="fill:none; stroke:#000000; stroke-width:4; stroke-linecap:round; stroke-linejoin:round"
+        d="M40 40C40 27.33 40 14.66 40 2C27.33 2 14.66 2 2 2C2 14.66 2 27.33 2 40C14.66 40 27.33 40 40 40V40V40z"
+        transform="matrix(1.3409,0,0,1.3409,4,4)"
+  />
+  <linearGradient id="gradient0" gradientUnits="userSpaceOnUse" x1="128" y1="1.98" x2="128" y2="39.99">
+   <stop offset="0" stop-color="#808080"/>
+   <stop offset="1" stop-color="#282828"/>
+  </linearGradient>
+  <path style="fill:url(#gradient0)"
+        d="M40 40C40 27.33 40 14.66 40 2C27.33 2 14.66 2 2 2C2 14.66 2 27.33 2 40C14.66 40 27.33 40 40 40V40V40z"
+        transform="matrix(1.3409,0,0,1.3409,4,4)"
+  />
+ </g>
+</svg>

@@ -40,7 +40,8 @@ class NetCastNode : public BBufferConsumer,
 					 public NetCastServer::Listener,
 					 public BTimeSource {
 public:
-							NetCastNode(BMediaAddOn* addon, BMessage* config);
+							NetCastNode(BMediaAddOn* addon, BMessage* config,
+								image_id addonImage);
 	virtual					~NetCastNode();
 
 	virtual BMediaAddOn*	AddOn(int32* internal_id) const;
@@ -119,6 +120,7 @@ private:
 	void					_ClockLoop();
 
 	BMediaAddOn*			fAddOn;
+	image_id				fAddOnImage;
 	media_input				fInput;
 	bool					fConnected;
 

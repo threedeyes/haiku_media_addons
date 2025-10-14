@@ -24,12 +24,13 @@
 #include "NetCastNode.h"
 #include "NetCastDebug.h"
 
-NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
+NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config, image_id addonImage)
 	: BMediaNode("NetCast"),
 	  BBufferConsumer(B_MEDIA_RAW_AUDIO),
 	  BMediaEventLooper(),
 	  BControllable(),
 	  fAddOn(addon),
+	  fAddOnImage(addonImage),
 	  fConnected(false),
 	  fEncoder(NULL),
 	  fCodecType(EncoderFactory::CODEC_PCM),
@@ -56,7 +57,7 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 	  fTSRunning(false),
 	  fTSThread(-1)
 {
-	TRACE_CALL("addon=%p", addon);
+	TRACE_CALL("addon=%p, image_id=%ld", addon, addonImage);
 
 	AddNodeKind(B_PHYSICAL_OUTPUT);
 
@@ -126,6 +127,7 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config)
 	}
 
 	fServer.SetListener(this);
+	fServer.SetAddOnImage(fAddOnImage);
 
 	TRACE_INFO("NetCastNode created: port=%ld, codec=%d, bitrate=%ld, chunk_divider=%ld",
 		fServerPort, fCodecType, fBitrate, fChunkDivider);
