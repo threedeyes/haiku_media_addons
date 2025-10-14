@@ -42,12 +42,9 @@ public:
 	virtual int32			RecommendedBufferSize(int32 pcmSamples) const;
 	
 private:
-	bool					fHeaderSent;
 	float					fSampleRate;
 	int32					fChannels;
 	uint32					fDataSize;
-	
-	void					_WriteWAVHeader(uint8* buffer);
 };
 
 #ifdef HAVE_LAME
@@ -69,6 +66,7 @@ public:
 	
 private:
 	lame_global_flags*		fLame;
+	int32					fChannels;
 };
 #endif
 

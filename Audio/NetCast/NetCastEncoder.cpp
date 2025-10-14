@@ -11,8 +11,7 @@
 #include "NetCastDebug.h"
 
 PCMEncoder::PCMEncoder()
-	: fHeaderSent(false),
-	  fSampleRate(44100),
+	: fSampleRate(44100),
 	  fChannels(2),
 	  fDataSize(0)
 {
@@ -31,7 +30,6 @@ PCMEncoder::Init(float sampleRate, int32 channels, int32 bitrate)
 
 	fSampleRate = sampleRate;
 	fChannels = channels;
-	fHeaderSent = false;
 	fDataSize = 0;
 
 	TRACE_INFO("PCM encoder initialized: %.0f Hz, %ld channels", sampleRate, channels);
@@ -43,32 +41,7 @@ void
 PCMEncoder::Uninit()
 {
 	TRACE_CALL("");
-	fHeaderSent = false;
 	TRACE_INFO("PCM encoder uninitialized, total data: %lu bytes", fDataSize);
-}
-
-void
-PCMEncoder::_WriteWAVHeader(uint8* buffer)
-{
-	TRACE_VERBOSE("Writing WAV header");
-
-	uint32 maxSize = 0xFFFFFFFF - 8;
-
-	memcpy(buffer, "RIFF", 4);
-	*(uint32*)(buffer + 4) = B_HOST_TO_LENDIAN_INT32(maxSize);
-	memcpy(buffer + 8, "WAVE", 4);
-
-	memcpy(buffer + 12, "fmt ", 4);
-	*(uint32*)(buffer + 16) = B_HOST_TO_LENDIAN_INT32(16);
-	*(uint16*)(buffer + 20) = B_HOST_TO_LENDIAN_INT16(1);
-	*(uint16*)(buffer + 22) = B_HOST_TO_LENDIAN_INT16(fChannels);
-	*(uint32*)(buffer + 24) = B_HOST_TO_LENDIAN_INT32((uint32)fSampleRate);
-	*(uint32*)(buffer + 28) = B_HOST_TO_LENDIAN_INT32((uint32)(fSampleRate * fChannels * 2));
-	*(uint16*)(buffer + 32) = B_HOST_TO_LENDIAN_INT16(fChannels * 2);
-	*(uint16*)(buffer + 34) = B_HOST_TO_LENDIAN_INT16(16);
-
-	memcpy(buffer + 36, "data", 4);
-	*(uint32*)(buffer + 40) = B_HOST_TO_LENDIAN_INT32(maxSize - 36);
 }
 
 int32
@@ -76,36 +49,24 @@ PCMEncoder::Encode(const int16* pcm, int32 samples, uint8* outBuffer, int32 outB
 {
 	TRACE_VERBOSE("samples=%ld, bufferSize=%ld", samples, outBufferSize);
 
-	int32 offset = 0;
-
-	if (!fHeaderSent) {
-		if (outBufferSize < 44) {
-			TRACE_ERROR("Output buffer too small for WAV header: %ld < 44", outBufferSize);
-			return 0;
-		}
-		_WriteWAVHeader(outBuffer);
-		offset = 44;
-		fHeaderSent = true;
-		TRACE_INFO("WAV header sent");
-	}
-
 	int32 dataSize = samples * fChannels * 2;
-	if (offset + dataSize > outBufferSize) {
-		TRACE_ERROR("Output buffer overflow: %ld + %ld > %ld", offset, dataSize, outBufferSize);
+
+	if (dataSize > outBufferSize) {
+		TRACE_ERROR("Output buffer overflow: %ld > %ld", dataSize, outBufferSize);
 		return 0;
 	}
 
-	memcpy(outBuffer + offset, pcm, dataSize);
+	memcpy(outBuffer, pcm, dataSize);
 
-	int16* data = (int16*)(outBuffer + offset);
+	int16* data = (int16*)outBuffer;
 	for (int32 i = 0; i < samples * fChannels; i++) {
 		data[i] = B_HOST_TO_LENDIAN_INT16(data[i]);
 	}
 
 	fDataSize += dataSize;
-	TRACE_VERBOSE("Encoded %ld bytes PCM data", offset + dataSize);
+	TRACE_VERBOSE("Encoded %ld bytes PCM data", dataSize);
 
-	return offset + dataSize;
+	return dataSize;
 }
 
 int32
@@ -118,13 +79,14 @@ PCMEncoder::Flush(uint8* outBuffer, int32 outBufferSize)
 int32
 PCMEncoder::RecommendedBufferSize(int32 pcmSamples) const
 {
-	return 44 + pcmSamples * fChannels * 2;
+	return pcmSamples * fChannels * 2;
 }
 
 #ifdef HAVE_LAME
 
 MP3Encoder::MP3Encoder()
-	: fLame(NULL)
+	: fLame(NULL),
+	  fChannels(2)
 {
 	TRACE_CALL("");
 }
@@ -145,6 +107,8 @@ MP3Encoder::Init(float sampleRate, int32 channels, int32 bitrate)
 		TRACE_ERROR("Failed to initialize LAME encoder");
 		return B_NO_MEMORY;
 	}
+
+	fChannels = channels;
 
 	lame_set_num_channels(fLame, channels);
 	lame_set_in_samplerate(fLame, (int)sampleRate);
@@ -191,8 +155,16 @@ MP3Encoder::Encode(const int16* pcm, int32 samples, uint8* outBuffer, int32 outB
 		return -1;
 	}
 
-	int32 encoded = lame_encode_buffer_interleaved(fLame,
-		(short int*)pcm, samples, outBuffer, outBufferSize);
+	int32 encoded;
+
+	if (fChannels == 1) {
+		encoded = lame_encode_buffer(fLame,
+			pcm, pcm,
+			samples, outBuffer, outBufferSize);
+	} else {
+		encoded = lame_encode_buffer_interleaved(fLame,
+			(short int*)pcm, samples, outBuffer, outBufferSize);
+	}
 
 	if (encoded < 0) {
 		TRACE_ERROR("LAME encoding failed: %ld", encoded);
