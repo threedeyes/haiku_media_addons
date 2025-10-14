@@ -291,23 +291,8 @@ NetCastNode::AcceptFormat(const media_destination& dest, media_format* format)
 
 	media_raw_audio_format& raw = format->u.raw_audio;
 
-	if (raw.frame_rate == media_raw_audio_format::wildcard.frame_rate)
-		raw.frame_rate = fPreferredSampleRate;
-
-	if (raw.channel_count == media_raw_audio_format::wildcard.channel_count)
-		raw.channel_count = fPreferredChannels;
-
-	if (!IsSampleRateSupported(raw.frame_rate)) {
-		TRACE_WARNING("Unsupported sample rate %.0f, using %.0f",
-			raw.frame_rate, fPreferredSampleRate);
-		raw.frame_rate = fPreferredSampleRate;
-	}
-
-	if (raw.channel_count < 1 || raw.channel_count > 8) {
-		TRACE_WARNING("Invalid channel count %ld, using %ld",
-			raw.channel_count, fPreferredChannels);
-		raw.channel_count = fPreferredChannels;
-	}
+	raw.frame_rate = fPreferredSampleRate;
+	raw.channel_count = fPreferredChannels;
 
 	if (raw.format == media_raw_audio_format::wildcard.format)
 		raw.format = media_raw_audio_format::B_AUDIO_SHORT;
@@ -531,11 +516,11 @@ NetCastNode::ProcessBuffer(BBuffer* buffer)
 	TRACE_VERBOSE("Processing buffer: %lu bytes, %.0f Hz, %ld ch",
 		buffer->SizeUsed(), fmt.frame_rate, fmt.channel_count);
 
-	ConvertToStereo16(buffer->Data(), buffer->SizeUsed(), fmt);
+	ConvertToPCM16(buffer->Data(), buffer->SizeUsed(), fmt);
 }
 
 void
-NetCastNode::ConvertToStereo16(const void* inData, size_t inSize,
+NetCastNode::ConvertToPCM16(const void* inData, size_t inSize,
 	const media_raw_audio_format& fmt)
 {
 	int32 inChannels = fmt.channel_count;
@@ -556,7 +541,7 @@ NetCastNode::ConvertToStereo16(const void* inData, size_t inSize,
 			inFrames = inSize / inChannels;
 			break;
 		default:
-			TRACE_ERROR("Unsupported audio format in ConvertToStereo16: %ld", fmt.format);
+			TRACE_ERROR("Unsupported audio format in ConvertToPCM16: %ld", fmt.format);
 			return;
 	}
 
@@ -565,19 +550,19 @@ NetCastNode::ConvertToStereo16(const void* inData, size_t inSize,
 		return;
 	}
 
-	int32 outChannels = inChannels < 2 ? 2 : inChannels;
-	size_t stereoSize = inFrames * outChannels * sizeof(int16);
+	int32 outChannels = inChannels;
+	size_t outputSize = inFrames * outChannels * sizeof(int16);
 
-	if (stereoSize > fPCMBufferSize) {
+	if (outputSize > fPCMBufferSize) {
 		delete[] fPCMBuffer;
 		fPCMBuffer = new(std::nothrow) int16[inFrames * outChannels];
 		if (!fPCMBuffer) {
-			TRACE_ERROR("Failed to allocate PCM buffer of size %lu", stereoSize);
+			TRACE_ERROR("Failed to allocate PCM buffer of size %lu", outputSize);
 			fPCMBufferSize = 0;
 			return;
 		}
-		fPCMBufferSize = stereoSize;
-		TRACE_VERBOSE("Reallocated PCM buffer: %lu bytes", stereoSize);
+		fPCMBufferSize = outputSize;
+		TRACE_VERBOSE("Reallocated PCM buffer: %lu bytes", outputSize);
 	}
 
 	int16* out = fPCMBuffer;
@@ -586,50 +571,20 @@ NetCastNode::ConvertToStereo16(const void* inData, size_t inSize,
 		const float* in = static_cast<const float*>(inData);
 		for (int32 i = 0; i < inFrames; i++) {
 			for (int32 ch = 0; ch < outChannels; ch++) {
-				float sample;
-				if (inChannels == 1) {
-					sample = in[i];
-				} else if (ch < inChannels) {
-					sample = in[i * inChannels + ch];
-				} else {
-					sample = 0.0f;
-				}
-
+				float sample = in[i * inChannels + ch];
 				if (sample > 1.0f) sample = 1.0f;
 				if (sample < -1.0f) sample = -1.0f;
-				
 				out[i * outChannels + ch] = static_cast<int16>(sample * 32767.0f);
 			}
 		}
 	} else if (fmt.format == media_raw_audio_format::B_AUDIO_SHORT) {
 		const int16* in = static_cast<const int16*>(inData);
-		if (inChannels == outChannels) {
-			memcpy(out, in, inFrames * outChannels * sizeof(int16));
-		} else {
-			for (int32 i = 0; i < inFrames; i++) {
-				for (int32 ch = 0; ch < outChannels; ch++) {
-					if (inChannels == 1) {
-						out[i * outChannels + ch] = in[i];
-					} else if (ch < inChannels) {
-						out[i * outChannels + ch] = in[i * inChannels + ch];
-					} else {
-						out[i * outChannels + ch] = 0;
-					}
-				}
-			}
-		}
+		memcpy(out, in, inFrames * outChannels * sizeof(int16));
 	} else if (fmt.format == media_raw_audio_format::B_AUDIO_INT) {
 		const int32* in = static_cast<const int32*>(inData);
 		for (int32 i = 0; i < inFrames; i++) {
 			for (int32 ch = 0; ch < outChannels; ch++) {
-				int32 sample;
-				if (inChannels == 1) {
-					sample = in[i];
-				} else if (ch < inChannels) {
-					sample = in[i * inChannels + ch];
-				} else {
-					sample = 0;
-				}
+				int32 sample = in[i * inChannels + ch];
 				out[i * outChannels + ch] = static_cast<int16>(sample >> 16);
 			}
 		}
@@ -637,14 +592,7 @@ NetCastNode::ConvertToStereo16(const void* inData, size_t inSize,
 		const int8* in = static_cast<const int8*>(inData);
 		for (int32 i = 0; i < inFrames; i++) {
 			for (int32 ch = 0; ch < outChannels; ch++) {
-				int8 sample;
-				if (inChannels == 1) {
-					sample = in[i];
-				} else if (ch < inChannels) {
-					sample = in[i * inChannels + ch];
-				} else {
-					sample = 0;
-				}
+				int8 sample = in[i * inChannels + ch];
 				out[i * outChannels + ch] = static_cast<int16>(sample << 8);
 			}
 		}
@@ -652,20 +600,13 @@ NetCastNode::ConvertToStereo16(const void* inData, size_t inSize,
 		const uint8* in = static_cast<const uint8*>(inData);
 		for (int32 i = 0; i < inFrames; i++) {
 			for (int32 ch = 0; ch < outChannels; ch++) {
-				uint8 sample;
-				if (inChannels == 1) {
-					sample = in[i];
-				} else if (ch < inChannels) {
-					sample = in[i * inChannels + ch];
-				} else {
-					sample = 128;
-				}
+				uint8 sample = in[i * inChannels + ch];
 				out[i * outChannels + ch] = static_cast<int16>((int(sample) - 128) << 8);
 			}
 		}
 	}
 
-	TRACE_VERBOSE("Converted %ld frames to stereo16", inFrames);
+	TRACE_VERBOSE("Converted %ld frames, %ld channels", inFrames, outChannels);
 
 	EncodeAndStream(fPCMBuffer, inFrames);
 }
@@ -710,7 +651,7 @@ NetCastNode::UpdateEncoder()
 		fEncoder->Uninit();
 	
 	status_t result = fEncoder->Init(fmt.frame_rate,
-									 fmt.channel_count >= 2 ? 2 : 1,
+									 fmt.channel_count,
 									 fBitrate);
 
 	if (result != B_OK) {
@@ -719,8 +660,8 @@ NetCastNode::UpdateEncoder()
 		return;
 	}
 
-	TRACE_INFO("Encoder initialized: %.0f Hz, %d ch, %ld kbps",
-		fmt.frame_rate, fmt.channel_count >= 2 ? 2 : 1, fBitrate);
+	TRACE_INFO("Encoder initialized: %.0f Hz, %ld ch, %ld kbps",
+		fmt.frame_rate, fmt.channel_count, fBitrate);
 
 	int32 recommendedSize = fEncoder->RecommendedBufferSize(
 		static_cast<int32>(fmt.frame_rate / fChunkDivider));
@@ -765,7 +706,7 @@ NetCastNode::PrepareWAVHeader()
 
 	const media_raw_audio_format& fmt = fInput.format.u.raw_audio;
 	uint32 sampleRate = static_cast<uint32>(fmt.frame_rate);
-	uint16 channels = fmt.channel_count >= 2 ? 2 : 1;
+	uint16 channels = static_cast<uint16>(fmt.channel_count);
 	uint32 maxSize = 0xFFFFFFFF - 8;
 
 	memcpy(fWAVHeader, "RIFF", 4);
@@ -1245,7 +1186,6 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 				TRACE_INFO("Sample rate changed: %.0f -> %.0f", fPreferredSampleRate, newRate);
 				fPreferredSampleRate = newRate;
 				fLastSampleRateChange = when;
-				fInput.format.u.raw_audio.frame_rate = newRate;
 				fParametersChanged = true;
 				needsWebUpdate = true;
 
@@ -1262,7 +1202,6 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 				TRACE_INFO("Channels changed: %ld -> %ld", fPreferredChannels, newChannels);
 				fPreferredChannels = newChannels;
 				fLastChannelsChange = when;
-				fInput.format.u.raw_audio.channel_count = newChannels;
 				fParametersChanged = true;
 				needsWebUpdate = true;
 

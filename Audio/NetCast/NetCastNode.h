@@ -103,7 +103,7 @@ private:
 
 	void					InitDefaults();
 	void					ProcessBuffer(BBuffer* buffer);
-	void					ConvertToStereo16(const void* inData, size_t inSize,
+	void					ConvertToPCM16(const void* inData, size_t inSize,
 								const media_raw_audio_format& fmt);
 	void					EncodeAndStream(const int16* pcmData, int32 samples);
 	void					UpdateEncoder();
