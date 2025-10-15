@@ -114,12 +114,14 @@ MP3Encoder::Init(float sampleRate, int32 channels, int32 bitrate)
 	lame_set_in_samplerate(fLame, (int)sampleRate);
 	lame_set_out_samplerate(fLame, (int)sampleRate);
 	lame_set_brate(fLame, bitrate);
-	lame_set_quality(fLame, 5);
-	lame_set_mode(fLame, channels == 2 ? STEREO : MONO);
+	lame_set_quality(fLame, 7);
+	lame_set_mode(fLame, channels == 2 ? JOINT_STEREO : MONO);
+	lame_set_VBR(fLame, vbr_off);
 	lame_set_bWriteVbrTag(fLame, 0);
-	lame_set_error_protection(fLame, 1);
+	lame_set_error_protection(fLame, 0);
 	lame_set_disable_reservoir(fLame, 1);
 	lame_set_strict_ISO(fLame, 0);
+	lame_set_findReplayGain(fLame, 0);
 
 	if (lame_init_params(fLame) < 0) {
 		TRACE_ERROR("Failed to initialize LAME parameters");
@@ -171,7 +173,7 @@ MP3Encoder::Encode(const int16* pcm, int32 samples, uint8* outBuffer, int32 outB
 		return -1;
 	}
 
-	TRACE_VERBOSE("Encoded %ld bytes MP3 data", encoded);
+	TRACE_VERBOSE("Encoded %ld bytes MP3 data from %ld samples", encoded, samples);
 	return encoded;
 }
 
