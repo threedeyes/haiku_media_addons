@@ -41,6 +41,12 @@ public:
 		bigtime_t			connectedTime;
 		int32				failedSendCount;
 		bigtime_t			lastSuccessfulSend;
+		uint8*				dataBuffer;
+		size_t				bufferSize;
+		size_t				writePos;
+		size_t				readPos;
+		size_t				dataInBuffer;
+		BLocker				bufferLock;
 	};
 
 							NetCastServer();
@@ -77,6 +83,9 @@ private:
 	BString					LoadHTMLTemplate();
 	BString					ReplaceTemplatePlaceholders(const BString& html);
 	const char*				GetMimeType(const char* filename);
+	bool					AddToClientBuffer(ClientInfo* client, const uint8* data, size_t size);
+	void					FlushClientBuffer(ClientInfo* client, bool& shouldDisconnect);
+	void					DisconnectClient(int32 index);
 
 	BSocket*				fServerSocket;
 	thread_id				fServerThread;

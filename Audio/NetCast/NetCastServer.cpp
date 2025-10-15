@@ -154,6 +154,90 @@ NetCastServer::Stop()
 		fListener->OnServerStopped();
 }
 
+bool
+NetCastServer::AddToClientBuffer(ClientInfo* client, const uint8* data, size_t size)
+{
+	if (!client->bufferLock.Lock())
+		return false;
+
+	if (client->dataInBuffer + size > client->bufferSize) {
+		client->bufferLock.Unlock();
+		return false;
+	}
+
+	for (size_t i = 0; i < size; i++) {
+		client->dataBuffer[client->writePos] = data[i];
+		client->writePos = (client->writePos + 1) % client->bufferSize;
+	}
+	client->dataInBuffer += size;
+
+	client->bufferLock.Unlock();
+	return true;
+}
+
+void
+NetCastServer::FlushClientBuffer(ClientInfo* client, bool& shouldDisconnect)
+{
+	if (!client->bufferLock.Lock())
+		return;
+
+	while (client->dataInBuffer > 0) {
+		size_t contiguous = client->bufferSize - client->readPos;
+		size_t toSend = (contiguous < client->dataInBuffer) ? contiguous : client->dataInBuffer;
+
+		ssize_t sent = client->socket->Write(
+			client->dataBuffer + client->readPos, toSend);
+
+		if (sent > 0) {
+			client->readPos = (client->readPos + sent) % client->bufferSize;
+			client->dataInBuffer -= sent;
+			client->lastSuccessfulSend = system_time();
+			client->failedSendCount = 0;
+
+			if (sent < static_cast<ssize_t>(toSend)) {
+				break;
+			}
+		} else if (sent < 0) {
+			if (errno == EWOULDBLOCK || errno == EAGAIN) {
+				break;
+			} else {
+				shouldDisconnect = true;
+				break;
+			}
+		} else {
+			shouldDisconnect = true;
+			break;
+		}
+	}
+
+	if (client->dataInBuffer > client->bufferSize * 0.9) {
+		client->failedSendCount++;
+		if (client->failedSendCount >= kMaxFailedSends) {
+			shouldDisconnect = true;
+		}
+	}
+
+	client->bufferLock.Unlock();
+}
+
+void
+NetCastServer::DisconnectClient(int32 index)
+{
+	ClientInfo* client = static_cast<ClientInfo*>(fClients.ItemAt(index));
+	if (!client)
+		return;
+
+	TRACE_INFO("Disconnecting client %s", client->address.String());
+
+	if (fListener)
+		fListener->OnClientDisconnected(client->address.String());
+
+	delete client->socket;
+	delete[] client->dataBuffer;
+	fClients.RemoveItem(index);
+	delete client;
+}
+
 void
 NetCastServer::BroadcastData(const uint8* data, size_t size)
 {
@@ -182,7 +266,7 @@ NetCastServer::BroadcastData(const uint8* data, size_t size)
 				TRACE_INFO("Sent complete header to %s", client->address.String());
 			} else if (headerSent < 0) {
 				if (errno == EWOULDBLOCK || errno == EAGAIN) {
-					TRACE_WARNING("Header send blocked for %s, disconnecting (buffer too small)",
+					TRACE_WARNING("Header send blocked for %s, disconnecting",
 						client->address.String());
 				} else {
 					TRACE_WARNING("Header send failed for %s: %s",
@@ -196,61 +280,21 @@ NetCastServer::BroadcastData(const uint8* data, size_t size)
 			}
 
 			if (shouldDisconnect) {
-				TRACE_INFO("Disconnecting client %s (header problem)", client->address.String());
-				if (fListener)
-					fListener->OnClientDisconnected(client->address.String());
-				delete client->socket;
-				fClients.RemoveItem(i);
-				delete client;
+				DisconnectClient(i);
 				continue;
 			}
+		}
 
+		if (!AddToClientBuffer(client, data, size)) {
+			TRACE_WARNING("Client buffer overflow: %s", client->address.String());
+			DisconnectClient(i);
 			continue;
 		}
 
-		ssize_t sent = client->socket->Write(data, size);
+		FlushClientBuffer(client, shouldDisconnect);
 
-		if (sent == static_cast<ssize_t>(size)) {
-			client->failedSendCount = 0;
-			client->lastSuccessfulSend = now;
-		} else if (sent < 0) {
-			if (errno == EWOULDBLOCK || errno == EAGAIN) {
-				client->failedSendCount++;
-				TRACE_VERBOSE("Client %s buffer full (failed %ld times)",
-					client->address.String(), client->failedSendCount);
-
-				if (client->failedSendCount >= kMaxFailedSends) {
-					TRACE_WARNING("Client %s too slow, disconnecting (%ld consecutive failures)",
-						client->address.String(), client->failedSendCount);
-					shouldDisconnect = true;
-				}
-			} else {
-				TRACE_WARNING("Write error for %s: %s",
-					client->address.String(), strerror(errno));
-				shouldDisconnect = true;
-			}
-		} else if (sent == 0) {
-			TRACE_WARNING("Connection closed for %s", client->address.String());
-			shouldDisconnect = true;
-		} else if (sent < static_cast<ssize_t>(size)) {
-			client->failedSendCount++;
-			TRACE_VERBOSE("Partial write to %s: %ld/%lu (failed %ld times)",
-				client->address.String(), sent, size, client->failedSendCount);
-
-			if (client->failedSendCount >= kMaxFailedSends) {
-				TRACE_WARNING("Client %s too slow, disconnecting", client->address.String());
-				shouldDisconnect = true;
-			}
-		}
-
-		if (shouldDisconnect) {
-			TRACE_INFO("Disconnecting client %s", client->address.String());
-			if (fListener)
-				fListener->OnClientDisconnected(client->address.String());
-			delete client->socket;
-			fClients.RemoveItem(i);
-			delete client;
-		}
+		if (shouldDisconnect)
+			DisconnectClient(i);
 	}
 
 	fClientsLock.Unlock();
@@ -651,7 +695,7 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 
 	int sockfd = clientSocket->Socket();
 
-	int sndbuf = CalculateOptimalSendBuffer();
+	int sndbuf = CalculateOptimalSendBuffer() * 4;
 	if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0) {
 		TRACE_INFO("Socket send buffer: %d KB", sndbuf / 1024);
 	} else {
@@ -691,6 +735,19 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	info->connectedTime = system_time();
 	info->failedSendCount = 0;
 	info->lastSuccessfulSend = system_time();
+
+	info->bufferSize = CalculateOptimalSendBuffer() * 4;
+	info->dataBuffer = new(std::nothrow) uint8[info->bufferSize];
+	info->writePos = 0;
+	info->readPos = 0;
+	info->dataInBuffer = 0;
+
+	if (!info->dataBuffer) {
+		TRACE_ERROR("Failed to allocate client buffer");
+		delete info;
+		delete clientSocket;
+		return;
+	}
 
 	fClientsLock.Lock();
 	fClients.AddItem(info);
@@ -783,6 +840,7 @@ NetCastServer::CleanupClients()
 		ClientInfo* client = static_cast<ClientInfo*>(fClients.ItemAt(i));
 		if (client) {
 			delete client->socket;
+			delete[] client->dataBuffer;
 			delete client;
 		}
 	}
