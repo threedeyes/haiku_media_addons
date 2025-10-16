@@ -22,9 +22,9 @@
 
 static const int32 kDefaultPort = 8000;
 static const int32 kDefaultBitrate = 128;
-static const int32 kDefaultChunkDivider = 20;
-static const float kDefaultSampleRate = 44100.0f;
-static const int32 kDefaultChannels = 2;
+static const float kDefaultOutputSampleRate = 44100.0f;
+static const int32 kDefaultOutputChannels = 2;
+static const int32 kDefaultMP3Quality = 5;
 static const int32 kWAVHeaderSize = 44;
 
 static const float kSupportedSampleRates[] = {
@@ -94,24 +94,25 @@ private:
 	enum {
 		P_SERVER_ENABLE = 1000,
 		P_SERVER_PORT,
+		P_STREAM_NAME,
 		P_CODEC_TYPE,
 		P_BITRATE,
-		P_CHUNK_SIZE,
-		P_SAMPLE_RATE,
-		P_CHANNELS,
+		P_OUTPUT_SAMPLE_RATE,
+		P_OUTPUT_CHANNELS,
+		P_MP3_QUALITY,
 		P_STREAM_URL,
 		P_SERVER_URL
 	};
 
 	void					InitDefaults();
 	void					ProcessBuffer(BBuffer* buffer);
-	void					ConvertToPCM16(const void* inData, size_t inSize,
-								const media_raw_audio_format& fmt);
-	void					EncodeAndStream(const int16* pcmData, int32 samples);
+	void					EncodeAndStream(const void* data, int32 frames,
+								const media_raw_audio_format& format);
 	void					UpdateEncoder();
 	void					PrepareWAVHeader();
 	void					HandleParameter(uint32 parameter);
 	bool					IsSampleRateSupported(float rate) const;
+	int32					GetActualBitrate() const;
 
 	status_t				LoadSettings();
 	status_t				SaveSettings();
@@ -129,9 +130,6 @@ private:
 	BLocker					fEncoderLock;
 	EncoderFactory::CodecType fCodecType;
 
-	int16*					fPCMBuffer;
-	size_t					fPCMBufferSize;
-
 	uint8*					fOutputBuffer;
 	size_t					fOutputBufferSize;
 
@@ -141,19 +139,21 @@ private:
 	bool					fServerEnabled;
 
 	int32					fServerPort;
+	BString					fStreamName;
 	int32					fBitrate;
-	int32					fChunkDivider;
-	float					fPreferredSampleRate;
-	int32					fPreferredChannels;
+	float					fOutputSampleRate;
+	int32					fOutputChannels;
+	int32					fMP3Quality;
 
-	bool					fParametersChanged;
+	bool					fEncoderSettingsChanged;
 
 	bigtime_t				fLastPortChange;
+	bigtime_t				fLastStreamNameChange;
 	bigtime_t				fLastCodecChange;
 	bigtime_t				fLastBitrateChange;
-	bigtime_t				fLastChunkSizeChange;
-	bigtime_t				fLastSampleRateChange;
-	bigtime_t				fLastChannelsChange;
+	bigtime_t				fLastOutputSampleRateChange;
+	bigtime_t				fLastOutputChannelsChange;
+	bigtime_t				fLastMP3QualityChange;
 	bigtime_t				fLastServerEnableChange;
 
 	volatile bool			fStarted;

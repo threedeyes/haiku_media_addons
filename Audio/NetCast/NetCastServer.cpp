@@ -26,10 +26,12 @@ NetCastServer::NetCastServer()
 	  fServerThread(-1),
 	  fServerRunning(false),
 	  fServerPort(0),
+	  fStreamName("Live Audio Stream"),
 	  fMimeType("audio/wav"),
 	  fBitrate(128),
 	  fSampleRate(44100.0f),
 	  fChannels(2),
+	  fBufferMultiplier(1.0f),
 	  fStreamHeader(NULL),
 	  fStreamHeaderSize(0),
 	  fListener(NULL),
@@ -152,6 +154,31 @@ NetCastServer::Stop()
 
 	if (fListener)
 		fListener->OnServerStopped();
+}
+
+void
+NetCastServer::ClearClientBuffers()
+{
+	TRACE_CALL("");
+
+	if (!fClientsLock.Lock())
+		return;
+
+	int32 count = fClients.CountItems();
+	for (int32 i = 0; i < count; i++) {
+		ClientInfo* client = static_cast<ClientInfo*>(fClients.ItemAt(i));
+		if (client && client->bufferLock.Lock()) {
+			client->writePos = 0;
+			client->readPos = 0;
+			client->dataInBuffer = 0;
+			client->failedSendCount = 0;
+			client->bufferLock.Unlock();
+			TRACE_VERBOSE("Cleared buffer for client %s", client->address.String());
+		}
+	}
+
+	fClientsLock.Unlock();
+	TRACE_INFO("Cleared buffers for %ld clients", count);
 }
 
 bool
@@ -316,26 +343,41 @@ NetCastServer::SetStreamInfo(const char* mimeType, int32 bitrate,
 		mimeType, bitrate, sampleRate, channels);
 }
 
+void
+NetCastServer::SetStreamName(const char* name)
+{
+	TRACE_CALL("name=%s", name);
+
+	if (name && strlen(name) > 0) {
+		fStreamName = name;
+	} else {
+		fStreamName = "Live Audio Stream";
+	}
+
+	TRACE_INFO("Stream name set to: %s", fStreamName.String());
+}
+
 int32
 NetCastServer::CalculateOptimalSendBuffer() const
 {
 	int32 bufferSize;
 
 	if (fMimeType == "audio/wav") {
-		bufferSize = static_cast<int32>(
-			fSampleRate * fChannels * 2 * kSendBufferSeconds
-		);
-		TRACE_INFO("PCM buffer: %.0f Hz × %ld ch × 2 × %.1f sec = %ld bytes (%.1f KB)",
-			fSampleRate, fChannels, kSendBufferSeconds, bufferSize, bufferSize / 1024.0f);
+		bufferSize = static_cast<int32>(fSampleRate * fChannels * 2 * 0.5f);
+		TRACE_VERBOSE("PCM buffer: %.0f Hz × %ld ch × 2 × 0.5 sec = %ld bytes",
+			fSampleRate, fChannels, bufferSize);
 	} else if (fMimeType == "audio/mpeg") {
-		bufferSize = (fBitrate * 1024 / 8) * static_cast<int32>(kSendBufferSeconds);
-		TRACE_INFO("MP3 buffer: %ld kbps × %.1f sec = %ld bytes (%.1f KB)",
-			fBitrate, kSendBufferSeconds, bufferSize, bufferSize / 1024.0f);
+		bufferSize = (fBitrate * 1024 / 8) * 1;
+		TRACE_VERBOSE("MP3 buffer: %ld kbps × 1 sec = %ld bytes",
+			fBitrate, bufferSize);
 	} else {
 		bufferSize = 65536;
 		TRACE_WARNING("Unknown format '%s', using default buffer: %ld bytes",
 			fMimeType.String(), bufferSize);
 	}
+
+	bufferSize = static_cast<int32>(bufferSize * fBufferMultiplier);
+	TRACE_VERBOSE("Buffer multiplier %.1f applied: %ld bytes", fBufferMultiplier, bufferSize);
 
 	const int32 MIN_BUFFER = 8192;
 	const int32 MAX_BUFFER = 524288;
@@ -388,28 +430,6 @@ NetCastServer::LoadHTMLTemplate()
 	TRACE_INFO("Loaded HTML template from add-on: %lu bytes", size);
 
 	return html;
-}
-
-BString
-NetCastServer::ReplaceTemplatePlaceholders(const BString& html)
-{
-	BString result = html;
-
-	result.ReplaceAll("{{MIME_TYPE}}", fMimeType);
-
-	BString formatName = (fMimeType == "audio/wav") ? "PCM/WAV" : "MP3";
-	result.ReplaceAll("{{FORMAT_NAME}}", formatName);
-
-	BString qualityInfo;
-	if (fMimeType == "audio/wav") {
-		qualityInfo << static_cast<int>(fSampleRate / 1000) << " kHz / "
-					<< (fChannels == 2 ? "Stereo" : "Mono");
-	} else {
-		qualityInfo << fBitrate << " kbps";
-	}
-	result.ReplaceAll("{{QUALITY_INFO}}", qualityInfo);
-
-	return result;
 }
 
 const char*
@@ -500,15 +520,14 @@ NetCastServer::SendHTMLPage(BAbstractSocket* socket)
 		return;
 	}
 
-	BString html = ReplaceTemplatePlaceholders(htmlTemplate);
 	BString response;
 	response << "HTTP/1.1 200 OK\r\n"
 			 << "Content-Type: text/html; charset=utf-8\r\n"
 			 << "Connection: close\r\n"
 			 << "Cache-Control: no-cache\r\n"
-			 << "Content-Length: " << html.Length() << "\r\n"
+			 << "Content-Length: " << htmlTemplate.Length() << "\r\n"
 			 << "\r\n"
-			 << html;
+			 << htmlTemplate;
 
 	socket->Write(response.String(), response.Length());
 }
@@ -695,9 +714,9 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 
 	int sockfd = clientSocket->Socket();
 
-	int sndbuf = CalculateOptimalSendBuffer() * 4;
+	int sndbuf = CalculateOptimalSendBuffer();
 	if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0) {
-		TRACE_INFO("Socket send buffer: %d KB", sndbuf / 1024);
+		TRACE_INFO("Socket send buffer: %d bytes (%.1f KB)", sndbuf, sndbuf / 1024.0f);
 	} else {
 		TRACE_WARNING("Failed to set SO_SNDBUF: %s", strerror(errno));
 	}
@@ -736,7 +755,7 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	info->failedSendCount = 0;
 	info->lastSuccessfulSend = system_time();
 
-	info->bufferSize = CalculateOptimalSendBuffer() * 4;
+	info->bufferSize = CalculateOptimalSendBuffer();
 	info->dataBuffer = new(std::nothrow) uint8[info->bufferSize];
 	info->writePos = 0;
 	info->readPos = 0;
@@ -753,7 +772,8 @@ NetCastServer::HandleClient(BAbstractSocket* clientSocket)
 	fClients.AddItem(info);
 	fClientsLock.Unlock();
 
-	TRACE_INFO("Client accepted: %s [%s]", info->address.String(), userAgent.String());
+	TRACE_INFO("Client accepted: %s [%s] (buffer: %lu bytes)",
+		info->address.String(), userAgent.String(), info->bufferSize);
 
 	if (fListener)
 		fListener->OnClientConnected(info->address.String(), userAgent.String());
@@ -766,15 +786,36 @@ NetCastServer::SendHTTPResponse(BAbstractSocket* socket)
 
 	BString response;
 	response << "HTTP/1.1 200 OK\r\n";
-	response << "Content-Type: " << fMimeType << "\r\n";
+
+	if (fMimeType == "audio/wav" || fMimeType == "audio/wave") {
+		response << "Content-Type: " << fMimeType
+				 << "; rate=" << static_cast<int32>(fSampleRate)
+				 << "; channels=" << fChannels
+				 << "; bits=16\r\n";
+	} else {
+		response << "Content-Type: " << fMimeType << "\r\n";
+	}
+
 	response << "Connection: close\r\n";
 	response << "Cache-Control: no-cache, no-store, must-revalidate\r\n";
 	response << "Pragma: no-cache\r\n";
 	response << "Expires: 0\r\n";
 	response << "X-Content-Duration: 0\r\n";
-	response << "icy-name: NetCast Low-Latency Stream\r\n";
-	response << "icy-br: " << fBitrate << "\r\n";
+
+	response << "icy-name: " << fStreamName << "\r\n";
+
+	if (fMimeType == "audio/mpeg")
+		response << "icy-br: " << fBitrate << "\r\n";
+
 	response << "icy-pub: 0\r\n";
+
+	response << "X-Audio-Samplerate: " << static_cast<int32>(fSampleRate) << "\r\n";
+	response << "X-Audio-Channels: " << fChannels << "\r\n";
+	response << "X-Audio-Bitrate: " << fBitrate << "\r\n";
+
+	if (fMimeType == "audio/wav" || fMimeType == "audio/wave")
+		response << "X-Audio-Bitdepth: 16\r\n";
+
 	response << "Server: NetCast/1.0 (Haiku)\r\n";
 	response << "\r\n";
 

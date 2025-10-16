@@ -34,24 +34,22 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config, image_id addonIma
 	  fConnected(false),
 	  fEncoder(NULL),
 	  fCodecType(EncoderFactory::CODEC_PCM),
-	  fPCMBuffer(NULL),
-	  fPCMBufferSize(0),
 	  fOutputBuffer(NULL),
 	  fOutputBufferSize(0),
 	  fWAVHeader(NULL),
 	  fServerEnabled(false),
 	  fServerPort(kDefaultPort),
 	  fBitrate(kDefaultBitrate),
-	  fChunkDivider(kDefaultChunkDivider),
-	  fPreferredSampleRate(kDefaultSampleRate),
-	  fPreferredChannels(kDefaultChannels),
-	  fParametersChanged(false),
+	  fOutputSampleRate(kDefaultOutputSampleRate),
+	  fOutputChannels(kDefaultOutputChannels),
+	  fMP3Quality(kDefaultMP3Quality),
+	  fEncoderSettingsChanged(false),
 	  fLastPortChange(0),
 	  fLastCodecChange(0),
 	  fLastBitrateChange(0),
-	  fLastChunkSizeChange(0),
-	  fLastSampleRateChange(0),
-	  fLastChannelsChange(0),
+	  fLastOutputSampleRateChange(0),
+	  fLastOutputChannelsChange(0),
+	  fLastMP3QualityChange(0),
 	  fLastServerEnableChange(0),
 	  fStarted(false),
 	  fTSRunning(false),
@@ -77,20 +75,20 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config, image_id addonIma
 			TRACE_VERBOSE("Config: bitrate=%ld", value);
 		}
 
-		if (config->FindInt32("chunk_divider", &value) == B_OK) {
-			fChunkDivider = value;
-			TRACE_VERBOSE("Config: chunk_divider=%ld", value);
-		}
-
 		float floatValue;
-		if (config->FindFloat("sample_rate", &floatValue) == B_OK) {
-			fPreferredSampleRate = floatValue;
-			TRACE_VERBOSE("Config: sample_rate=%.0f", floatValue);
+		if (config->FindFloat("output_sample_rate", &floatValue) == B_OK) {
+			fOutputSampleRate = floatValue;
+			TRACE_VERBOSE("Config: output_sample_rate=%.0f", floatValue);
 		}
 
-		if (config->FindInt32("channels", &value) == B_OK) {
-			fPreferredChannels = value;
-			TRACE_VERBOSE("Config: channels=%ld", value);
+		if (config->FindInt32("output_channels", &value) == B_OK) {
+			fOutputChannels = value;
+			TRACE_VERBOSE("Config: output_channels=%ld", value);
+		}
+
+		if (config->FindInt32("mp3_quality", &value) == B_OK) {
+			fMP3Quality = value;
+			TRACE_VERBOSE("Config: mp3_quality=%ld", value);
 		}
 
 		bool boolValue;
@@ -115,6 +113,15 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config, image_id addonIma
 		fEncoder = EncoderFactory::CreateEncoder(EncoderFactory::CODEC_PCM);
 	}
 
+#ifdef HAVE_LAME
+	if (fCodecType == EncoderFactory::CODEC_MP3) {
+		MP3Encoder* mp3Encoder = dynamic_cast<MP3Encoder*>(fEncoder);
+		if (mp3Encoder) {
+			mp3Encoder->SetQuality(fMP3Quality);
+		}
+	}
+#endif
+
 	fOutputBufferSize = 16384;
 	fOutputBuffer = new(std::nothrow) uint8[fOutputBufferSize];
 	if (!fOutputBuffer) {
@@ -129,8 +136,8 @@ NetCastNode::NetCastNode(BMediaAddOn* addon, BMessage* config, image_id addonIma
 	fServer.SetListener(this);
 	fServer.SetAddOnImage(fAddOnImage);
 
-	TRACE_INFO("NetCastNode created: port=%ld, codec=%d, bitrate=%ld, chunk_divider=%ld",
-		fServerPort, fCodecType, fBitrate, fChunkDivider);
+	TRACE_INFO("NetCastNode created: port=%ld, codec=%d, bitrate=%ld",
+		fServerPort, fCodecType, fBitrate);
 }
 
 NetCastNode::~NetCastNode()
@@ -145,13 +152,19 @@ NetCastNode::~NetCastNode()
 
 	fEncoderLock.Lock();
 	if (fEncoder) {
+		if (fOutputBuffer && fOutputBufferSize > 0) {
+			int32 flushedSize = fEncoder->Flush(fOutputBuffer, fOutputBufferSize);
+			if (flushedSize > 0) {
+				TRACE_INFO("Flushed %ld bytes on encoder shutdown", flushedSize);
+				fServer.BroadcastData(fOutputBuffer, flushedSize);
+			}
+		}
 		fEncoder->Uninit();
 		delete fEncoder;
 		fEncoder = NULL;
 	}
 	fEncoderLock.Unlock();
 
-	delete[] fPCMBuffer;
 	delete[] fOutputBuffer;
 	delete[] fWAVHeader;
 
@@ -165,18 +178,20 @@ NetCastNode::InitDefaults()
 
 	fServerEnabled = false;
 	fServerPort = kDefaultPort;
+	fStreamName = "Live Audio Stream";
 	fBitrate = kDefaultBitrate;
-	fChunkDivider = kDefaultChunkDivider;
-	fPreferredSampleRate = kDefaultSampleRate;
-	fPreferredChannels = kDefaultChannels;
-	fCodecType = EncoderFactory::CODEC_PCM;
+	fOutputSampleRate = kDefaultOutputSampleRate;
+	fOutputChannels = kDefaultOutputChannels;
+	fMP3Quality = kDefaultMP3Quality;
+	fCodecType = EncoderFactory::CODEC_MP3;
 
 	fLastPortChange = 0;
+	fLastStreamNameChange = 0;
 	fLastCodecChange = 0;
 	fLastBitrateChange = 0;
-	fLastChunkSizeChange = 0;
-	fLastSampleRateChange = 0;
-	fLastChannelsChange = 0;
+	fLastOutputSampleRateChange = 0;
+	fLastOutputChannelsChange = 0;
+	fLastMP3QualityChange = 0;
 	fLastServerEnableChange = 0;
 }
 
@@ -204,10 +219,6 @@ NetCastNode::NodeRegistered()
 	fInput.destination.id = 0;
 	fInput.format.type = B_MEDIA_RAW_AUDIO;
 	fInput.format.u.raw_audio = media_raw_audio_format::wildcard;
-	fInput.format.u.raw_audio.channel_count = fPreferredChannels;
-	fInput.format.u.raw_audio.frame_rate = fPreferredSampleRate;
-	fInput.format.u.raw_audio.format = media_raw_audio_format::B_AUDIO_SHORT;
-	fInput.format.u.raw_audio.byte_order = B_MEDIA_HOST_ENDIAN;
 	strcpy(fInput.name, "audio input");
 
 	fStarted = false;
@@ -222,14 +233,59 @@ NetCastNode::NodeRegistered()
 
 	fEncoderLock.Lock();
 
-	NetCastEncoder* savedEncoder = EncoderFactory::CreateEncoder(fCodecType);
-	if (savedEncoder) {
+	NetCastEncoder* newEncoder = EncoderFactory::CreateEncoder(fCodecType);
+	if (newEncoder) {
 		if (fEncoder) {
 			fEncoder->Uninit();
 			delete fEncoder;
 		}
-		fEncoder = savedEncoder;
-		TRACE_INFO("Encoder recreated from settings: type=%d", fCodecType);
+		fEncoder = newEncoder;
+
+#ifdef HAVE_LAME
+		if (fCodecType == EncoderFactory::CODEC_MP3) {
+			MP3Encoder* mp3Encoder = dynamic_cast<MP3Encoder*>(fEncoder);
+			if (mp3Encoder) {
+				mp3Encoder->SetQuality(fMP3Quality);
+			}
+		}
+#endif
+
+		status_t result = fEncoder->SetOutputFormat(fOutputSampleRate,
+			fOutputChannels, fBitrate);
+
+		if (result == B_OK) {
+			int32 recommendedSize = fEncoder->RecommendedBufferSize(
+				static_cast<int32>(fOutputSampleRate / 10));
+
+			if (recommendedSize > static_cast<int32>(fOutputBufferSize)) {
+				delete[] fOutputBuffer;
+				fOutputBufferSize = recommendedSize;
+				fOutputBuffer = new(std::nothrow) uint8[fOutputBufferSize];
+				if (!fOutputBuffer) {
+					TRACE_ERROR("Failed to allocate output buffer: %lu bytes", fOutputBufferSize);
+					fOutputBufferSize = 0;
+				}
+			}
+
+			const char* mimeType = fEncoder->MimeType();
+			int32 actualBitrate = GetActualBitrate();
+			fServer.SetStreamInfo(mimeType, actualBitrate, fOutputSampleRate, fOutputChannels);
+
+			float bufferMultiplier = fEncoder->GetBufferMultiplier();
+			fServer.SetBufferMultiplier(bufferMultiplier);
+
+			if (fCodecType == EncoderFactory::CODEC_PCM && fWAVHeader) {
+				PrepareWAVHeader();
+				fServer.SendHeaderToNewClients(fWAVHeader, kWAVHeaderSize);
+			} else {
+				fServer.SendHeaderToNewClients(NULL, 0);
+			}
+
+			TRACE_INFO("Encoder initialized: %s @ %ld kbps, %.0f Hz, %ld ch",
+				mimeType, actualBitrate, fOutputSampleRate, fOutputChannels);
+		}
+
+		TRACE_INFO("Encoder created from settings: type=%d", fCodecType);
 	} else {
 		TRACE_ERROR("Failed to create encoder from settings, keeping default");
 	}
@@ -240,6 +296,8 @@ NetCastNode::NodeRegistered()
 	SetParameterWeb(web);
 
 	Run();
+
+	fServer.SetStreamName(fStreamName.String());
 
 	if (fServerEnabled) {
 		TRACE_INFO("Auto-starting server on port %ld", fServerPort);
@@ -273,6 +331,20 @@ NetCastNode::IsSampleRateSupported(float rate) const
 	return false;
 }
 
+int32
+NetCastNode::GetActualBitrate() const
+{
+	if (fCodecType == EncoderFactory::CODEC_PCM) {
+		return static_cast<int32>(fOutputSampleRate * fOutputChannels * 16 / 1000);
+	}
+#ifdef HAVE_LAME
+	else if (fCodecType == EncoderFactory::CODEC_MP3) {
+		return fBitrate;
+	}
+#endif
+	return 0;
+}
+
 status_t
 NetCastNode::AcceptFormat(const media_destination& dest, media_format* format)
 {
@@ -291,39 +363,10 @@ NetCastNode::AcceptFormat(const media_destination& dest, media_format* format)
 		return B_MEDIA_BAD_FORMAT;
 	}
 
-	media_raw_audio_format& raw = format->u.raw_audio;
-
-	raw.frame_rate = fPreferredSampleRate;
-	raw.channel_count = fPreferredChannels;
-
-	if (raw.format == media_raw_audio_format::wildcard.format)
-		raw.format = media_raw_audio_format::B_AUDIO_SHORT;
-	
-	switch (raw.format) {
-		case media_raw_audio_format::B_AUDIO_FLOAT:
-		case media_raw_audio_format::B_AUDIO_INT:
-		case media_raw_audio_format::B_AUDIO_SHORT:
-		case media_raw_audio_format::B_AUDIO_CHAR:
-		case media_raw_audio_format::B_AUDIO_UCHAR:
-			break;
-		default:
-			TRACE_WARNING("Unsupported audio format %ld, using B_AUDIO_SHORT", raw.format);
-			raw.format = media_raw_audio_format::B_AUDIO_SHORT;
-			break;
-	}
-
-	if (raw.byte_order == media_raw_audio_format::wildcard.byte_order)
-		raw.byte_order = B_MEDIA_HOST_ENDIAN;
-	
-	raw.buffer_size = static_cast<int32>(raw.frame_rate / fChunkDivider) *
-					 raw.channel_count *
-					 (raw.format == media_raw_audio_format::B_AUDIO_FLOAT ? 4 : 2);
-
-	float latencyMs = (1000.0f / raw.frame_rate) * (raw.buffer_size / raw.channel_count /
-		(raw.format == media_raw_audio_format::B_AUDIO_FLOAT ? 4 : 2));
-
-	TRACE_INFO("Accepted format: %.0f Hz, %ld ch, format=%ld, buffer=%ld (~%.1fms)",
-		raw.frame_rate, raw.channel_count, raw.format, raw.buffer_size, latencyMs);
+	TRACE_INFO("Accepted format: %.0f Hz, %ld ch, format=%ld",
+		format->u.raw_audio.frame_rate,
+		format->u.raw_audio.channel_count,
+		format->u.raw_audio.format);
 	
 	return B_OK;
 }
@@ -411,13 +454,16 @@ NetCastNode::Connected(const media_source& producer,
 		with_format.u.raw_audio.channel_count,
 		with_format.u.raw_audio.format);
 
-	UpdateEncoder();
+	fServer.ClearClientBuffers();
 
 	fConnected = true;
-	fParametersChanged = false;
 
-	BParameterWeb* web = MakeParameterWeb();
-	SetParameterWeb(web);
+	if (RunState() == B_STARTED) {
+		fStarted = true;
+		TRACE_INFO("Graph already running, activating buffer processing");
+	}
+
+	UpdateEncoder();
 
 	return B_OK;
 }
@@ -435,15 +481,23 @@ NetCastNode::Disconnected(const media_source& producer,
 
 	fInput.source = media_source::null;
 	fConnected = false;
+	fStarted = false;
 
 	TRACE_INFO("Disconnected from producer");
 
 	fEncoderLock.Lock();
 
-	if (fEncoder)
-		fEncoder->Uninit();
+	if (fEncoder && fOutputBuffer && fOutputBufferSize > 0) {
+		int32 flushedSize = fEncoder->Flush(fOutputBuffer, fOutputBufferSize);
+		if (flushedSize > 0) {
+			TRACE_INFO("Flushed %ld bytes on disconnect", flushedSize);
+			fServer.BroadcastData(fOutputBuffer, flushedSize);
+		}
+	}
 
 	fEncoderLock.Unlock();
+
+	fServer.ClearClientBuffers();
 }
 
 status_t
@@ -463,6 +517,8 @@ NetCastNode::FormatChanged(const media_source& producer,
 	TRACE_INFO("Format changed: %.0f Hz, %ld channels",
 		format.u.raw_audio.frame_rate,
 		format.u.raw_audio.channel_count);
+
+	fServer.ClearClientBuffers();
 
 	UpdateEncoder();
 
@@ -485,6 +541,10 @@ NetCastNode::HandleEvent(const media_timed_event* event,
 
 	switch (event->type) {
 		case BTimedEventQueue::B_HANDLE_BUFFER:
+			if (fConnected && !fStarted) {
+				fStarted = true;
+				TRACE_INFO("Auto-started from incoming buffer");
+			}
 			if (fStarted)
 				ProcessBuffer(static_cast<BBuffer*>(event->pointer));
 			static_cast<BBuffer*>(event->pointer)->Recycle();
@@ -515,106 +575,38 @@ NetCastNode::ProcessBuffer(BBuffer* buffer)
 		return;
 
 	const media_raw_audio_format& fmt = fInput.format.u.raw_audio;
-	TRACE_VERBOSE("Processing buffer: %lu bytes, %.0f Hz, %ld ch",
-		buffer->SizeUsed(), fmt.frame_rate, fmt.channel_count);
 
-	ConvertToPCM16(buffer->Data(), buffer->SizeUsed(), fmt);
-}
-
-void
-NetCastNode::ConvertToPCM16(const void* inData, size_t inSize,
-	const media_raw_audio_format& fmt)
-{
-	int32 inChannels = fmt.channel_count;
-	int32 inFrames;
-
+	int32 frameSize;
 	switch (fmt.format) {
 		case media_raw_audio_format::B_AUDIO_FLOAT:
-			inFrames = inSize / (inChannels * 4);
+			frameSize = fmt.channel_count * 4;
 			break;
 		case media_raw_audio_format::B_AUDIO_INT:
-			inFrames = inSize / (inChannels * 4);
+			frameSize = fmt.channel_count * 4;
 			break;
 		case media_raw_audio_format::B_AUDIO_SHORT:
-			inFrames = inSize / (inChannels * 2);
+			frameSize = fmt.channel_count * 2;
 			break;
 		case media_raw_audio_format::B_AUDIO_CHAR:
 		case media_raw_audio_format::B_AUDIO_UCHAR:
-			inFrames = inSize / inChannels;
+			frameSize = fmt.channel_count;
 			break;
 		default:
-			TRACE_ERROR("Unsupported audio format in ConvertToPCM16: %ld", fmt.format);
+			TRACE_ERROR("Unsupported audio format: %ld", fmt.format);
 			return;
 	}
 
-	if (inFrames == 0) {
-		TRACE_WARNING("Zero frames in buffer");
-		return;
-	}
+	int32 frames = buffer->SizeUsed() / frameSize;
 
-	int32 outChannels = inChannels;
-	size_t outputSize = inFrames * outChannels * sizeof(int16);
+	TRACE_VERBOSE("Processing buffer: %ld frames, %.0f Hz, %ld ch",
+		frames, fmt.frame_rate, fmt.channel_count);
 
-	if (outputSize > fPCMBufferSize) {
-		delete[] fPCMBuffer;
-		fPCMBuffer = new(std::nothrow) int16[inFrames * outChannels];
-		if (!fPCMBuffer) {
-			TRACE_ERROR("Failed to allocate PCM buffer of size %lu", outputSize);
-			fPCMBufferSize = 0;
-			return;
-		}
-		fPCMBufferSize = outputSize;
-		TRACE_VERBOSE("Reallocated PCM buffer: %lu bytes", outputSize);
-	}
-
-	int16* out = fPCMBuffer;
-
-	if (fmt.format == media_raw_audio_format::B_AUDIO_FLOAT) {
-		const float* in = static_cast<const float*>(inData);
-		for (int32 i = 0; i < inFrames; i++) {
-			for (int32 ch = 0; ch < outChannels; ch++) {
-				float sample = in[i * inChannels + ch];
-				if (sample > 1.0f) sample = 1.0f;
-				if (sample < -1.0f) sample = -1.0f;
-				out[i * outChannels + ch] = static_cast<int16>(sample * 32767.0f);
-			}
-		}
-	} else if (fmt.format == media_raw_audio_format::B_AUDIO_SHORT) {
-		const int16* in = static_cast<const int16*>(inData);
-		memcpy(out, in, inFrames * outChannels * sizeof(int16));
-	} else if (fmt.format == media_raw_audio_format::B_AUDIO_INT) {
-		const int32* in = static_cast<const int32*>(inData);
-		for (int32 i = 0; i < inFrames; i++) {
-			for (int32 ch = 0; ch < outChannels; ch++) {
-				int32 sample = in[i * inChannels + ch];
-				out[i * outChannels + ch] = static_cast<int16>(sample >> 16);
-			}
-		}
-	} else if (fmt.format == media_raw_audio_format::B_AUDIO_CHAR) {
-		const int8* in = static_cast<const int8*>(inData);
-		for (int32 i = 0; i < inFrames; i++) {
-			for (int32 ch = 0; ch < outChannels; ch++) {
-				int8 sample = in[i * inChannels + ch];
-				out[i * outChannels + ch] = static_cast<int16>(sample << 8);
-			}
-		}
-	} else if (fmt.format == media_raw_audio_format::B_AUDIO_UCHAR) {
-		const uint8* in = static_cast<const uint8*>(inData);
-		for (int32 i = 0; i < inFrames; i++) {
-			for (int32 ch = 0; ch < outChannels; ch++) {
-				uint8 sample = in[i * inChannels + ch];
-				out[i * outChannels + ch] = static_cast<int16>((int(sample) - 128) << 8);
-			}
-		}
-	}
-
-	TRACE_VERBOSE("Converted %ld frames, %ld channels", inFrames, outChannels);
-
-	EncodeAndStream(fPCMBuffer, inFrames);
+	EncodeAndStream(buffer->Data(), frames, fmt);
 }
 
 void
-NetCastNode::EncodeAndStream(const int16* pcmData, int32 samples)
+NetCastNode::EncodeAndStream(const void* data, int32 frames,
+	const media_raw_audio_format& format)
 {
 	if (!fEncoderLock.Lock())
 		return;
@@ -625,8 +617,8 @@ NetCastNode::EncodeAndStream(const int16* pcmData, int32 samples)
 		return;
 	}
 
-	int32 encodedSize = fEncoder->Encode(pcmData, samples, 
-										 fOutputBuffer, fOutputBufferSize);
+	int32 encodedSize = fEncoder->EncodeBuffer(data, frames, format,
+		fOutputBuffer, fOutputBufferSize);
 
 	if (encodedSize > 0) {
 		TRACE_VERBOSE("Broadcasting %ld encoded bytes to %ld clients",
@@ -644,16 +636,20 @@ NetCastNode::UpdateEncoder()
 {
 	TRACE_CALL("");
 
-	const media_raw_audio_format& fmt = fInput.format.u.raw_audio;
-
 	if (!fEncoderLock.Lock())
 		return;
 
-	if (fEncoder)
+	if (fEncoder && fOutputBuffer && fOutputBufferSize > 0) {
+		int32 flushedSize = fEncoder->Flush(fOutputBuffer, fOutputBufferSize);
+		if (flushedSize > 0) {
+			TRACE_INFO("Flushed %ld bytes before encoder update", flushedSize);
+			fServer.BroadcastData(fOutputBuffer, flushedSize);
+		}
 		fEncoder->Uninit();
+	}
 	
-	status_t result = fEncoder->Init(fmt.frame_rate,
-									 fmt.channel_count,
+	status_t result = fEncoder->SetOutputFormat(fOutputSampleRate,
+									 fOutputChannels,
 									 fBitrate);
 
 	if (result != B_OK) {
@@ -663,10 +659,10 @@ NetCastNode::UpdateEncoder()
 	}
 
 	TRACE_INFO("Encoder initialized: %.0f Hz, %ld ch, %ld kbps",
-		fmt.frame_rate, fmt.channel_count, fBitrate);
+		fOutputSampleRate, fOutputChannels, fBitrate);
 
 	int32 recommendedSize = fEncoder->RecommendedBufferSize(
-		static_cast<int32>(fmt.frame_rate / fChunkDivider));
+		static_cast<int32>(fOutputSampleRate / 10));
 
 	if (recommendedSize > static_cast<int32>(fOutputBufferSize)) {
 		delete[] fOutputBuffer;
@@ -682,10 +678,14 @@ NetCastNode::UpdateEncoder()
 	}
 	
 	const char* mimeType = fEncoder ? fEncoder->MimeType() : "audio/wav";
-	fServer.SetStreamInfo(mimeType, fBitrate, fmt.frame_rate, fmt.channel_count);
+	int32 actualBitrate = GetActualBitrate();
+	fServer.SetStreamInfo(mimeType, actualBitrate, fOutputSampleRate, fOutputChannels);
 
-	TRACE_INFO("Stream info updated: %s @ %ld kbps, %.0f Hz, %ld ch",
-		mimeType, fBitrate, fmt.frame_rate, fmt.channel_count);
+	float bufferMultiplier = fEncoder ? fEncoder->GetBufferMultiplier() : 1.0f;
+	fServer.SetBufferMultiplier(bufferMultiplier);
+
+	TRACE_INFO("Stream info updated: %s @ %ld kbps, %.0f Hz, %ld ch (buffer mult: %.1f)",
+		mimeType, actualBitrate, fOutputSampleRate, fOutputChannels, bufferMultiplier);
 
 	if (fCodecType == EncoderFactory::CODEC_PCM && fWAVHeader) {
 		PrepareWAVHeader();
@@ -707,9 +707,8 @@ NetCastNode::PrepareWAVHeader()
 	if (!fWAVHeader)
 		return;
 
-	const media_raw_audio_format& fmt = fInput.format.u.raw_audio;
-	uint32 sampleRate = static_cast<uint32>(fmt.frame_rate);
-	uint16 channels = static_cast<uint16>(fmt.channel_count);
+	uint32 sampleRate = static_cast<uint32>(fOutputSampleRate);
+	uint16 channels = static_cast<uint16>(fOutputChannels);
 	uint32 maxSize = 0xFFFFFFFF - 8;
 
 	memcpy(fWAVHeader, "RIFF", 4);
@@ -813,6 +812,12 @@ NetCastNode::LoadSettings()
 		}
 	}
 
+	BString str;
+	if (settings.FindString("stream_name", &str) == B_OK) {
+		fStreamName = str;
+		TRACE_VERBOSE("Loaded stream_name: %s", str.String());
+	}
+
 	if (settings.FindInt32("codec", &value) == B_OK) {
 		if (value >= 0 && value < EncoderFactory::GetCodecCount()) {
 			fCodecType = static_cast<EncoderFactory::CodecType>(value);
@@ -827,24 +832,24 @@ NetCastNode::LoadSettings()
 		}
 	}
 
-	if (settings.FindInt32("chunk_divider", &value) == B_OK) {
-		if (value >= 10 && value <= 160) {
-			fChunkDivider = value;
-			TRACE_VERBOSE("Loaded chunk_divider: %ld", value);
-		}
-	}
-
-	if (settings.FindInt32("sample_rate", &value) == B_OK) {
+	if (settings.FindInt32("output_sample_rate", &value) == B_OK) {
 		if (IsSampleRateSupported(static_cast<float>(value))) {
-			fPreferredSampleRate = static_cast<float>(value);
-			TRACE_VERBOSE("Loaded sample_rate: %ld", value);
+			fOutputSampleRate = static_cast<float>(value);
+			TRACE_VERBOSE("Loaded output_sample_rate: %ld", value);
 		}
 	}
 
-	if (settings.FindInt32("channels", &value) == B_OK) {
+	if (settings.FindInt32("output_channels", &value) == B_OK) {
 		if (value >= 1 && value <= 2) {
-			fPreferredChannels = value;
-			TRACE_VERBOSE("Loaded channels: %ld", value);
+			fOutputChannels = value;
+			TRACE_VERBOSE("Loaded output_channels: %ld", value);
+		}
+	}
+
+	if (settings.FindInt32("mp3_quality", &value) == B_OK) {
+		if (value >= 0 && value <= 9) {
+			fMP3Quality = value;
+			TRACE_VERBOSE("Loaded mp3_quality: %ld", value);
 		}
 	}
 
@@ -873,11 +878,12 @@ NetCastNode::SaveSettings()
 
 	BMessage settings('NETC');
 	settings.AddInt32("port", fServerPort);
+	settings.AddString("stream_name", fStreamName);
 	settings.AddInt32("codec", static_cast<int32>(fCodecType));
 	settings.AddInt32("bitrate", fBitrate);
-	settings.AddInt32("chunk_divider", fChunkDivider);
-	settings.AddInt32("sample_rate", static_cast<int32>(fPreferredSampleRate));
-	settings.AddInt32("channels", fPreferredChannels);
+	settings.AddInt32("output_sample_rate", static_cast<int32>(fOutputSampleRate));
+	settings.AddInt32("output_channels", fOutputChannels);
+	settings.AddInt32("mp3_quality", fMP3Quality);
 	settings.AddBool("server_enabled", fServerEnabled);
 
 	status = settings.Flatten(&file);
@@ -900,10 +906,10 @@ NetCastNode::MakeParameterWeb()
 
 	BParameterGroup* mainGroup = web->MakeGroup("NetCast Settings");
 
-	BParameterGroup* formatGroup = mainGroup->MakeGroup("Audio Format");
+	BParameterGroup* formatGroup = mainGroup->MakeGroup("Output Format");
 
 	BDiscreteParameter* rateParam = formatGroup->MakeDiscreteParameter(
-		P_SAMPLE_RATE, B_MEDIA_NO_TYPE, "Sample Rate", B_GENERIC);
+		P_OUTPUT_SAMPLE_RATE, B_MEDIA_NO_TYPE, "Sample Rate", B_GENERIC);
 	for (size_t i = 0; i < sizeof(kSupportedSampleRates) / sizeof(kSupportedSampleRates[0]); i++) {
 		int32 rate = static_cast<int32>(kSupportedSampleRates[i]);
 		BString label;
@@ -912,19 +918,9 @@ NetCastNode::MakeParameterWeb()
 	}
 
 	BDiscreteParameter* channelsParam = formatGroup->MakeDiscreteParameter(
-		P_CHANNELS, B_MEDIA_NO_TYPE, "Channels", B_GENERIC);
+		P_OUTPUT_CHANNELS, B_MEDIA_NO_TYPE, "Channels", B_GENERIC);
 	channelsParam->AddItem(1, "Mono");
 	channelsParam->AddItem(2, "Stereo");
-
-	formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "", B_GENERIC);
-
-	BDiscreteParameter* chunkParam = formatGroup->MakeDiscreteParameter(
-		P_CHUNK_SIZE, B_MEDIA_NO_TYPE, "Chunk Size", B_GENERIC);
-	chunkParam->AddItem(10, "100 ms");
-	chunkParam->AddItem(20, "50 ms");
-	chunkParam->AddItem(40, "25 ms");
-	chunkParam->AddItem(80, "12.5 ms");
-	chunkParam->AddItem(160, "6.25 ms");
 
 	formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "", B_GENERIC);
 
@@ -945,8 +941,22 @@ NetCastNode::MakeParameterWeb()
 		bitrateParam->AddItem(192, "192 kbps");
 		bitrateParam->AddItem(256, "256 kbps");
 		bitrateParam->AddItem(320, "320 kbps");
+
+		BDiscreteParameter* qualityParam = formatGroup->MakeDiscreteParameter(
+			P_MP3_QUALITY, B_MEDIA_NO_TYPE, "Quality", B_GENERIC);
+		qualityParam->AddItem(0, "Best (0)");
+		qualityParam->AddItem(2, "High (2)");
+		qualityParam->AddItem(5, "Medium (5)");
+		qualityParam->AddItem(7, "Low (7)");
+		qualityParam->AddItem(9, "Fast (9)");
 	}
 #endif
+
+	if (fEncoderSettingsChanged) {
+		formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "", B_GENERIC);
+		formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
+			"Restart Media Services to apply changes", B_GENERIC);
+	}
 
 	BParameterGroup* serverGroup = mainGroup->MakeGroup("Server Control");
 
@@ -958,19 +968,16 @@ NetCastNode::MakeParameterWeb()
 	serverGroup->MakeTextParameter(
 		P_SERVER_PORT, B_MEDIA_NO_TYPE, "Port: ", B_GENERIC, 16);
 
+	serverGroup->MakeTextParameter(
+		P_STREAM_NAME, B_MEDIA_NO_TYPE, "Stream Name: ", B_GENERIC, 128);
+
 	serverGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
-		"________________________________________________________", B_GENERIC);
+		"\n________________________________________________________", B_GENERIC);
 
 	serverGroup->MakeTextParameter(
 		P_SERVER_URL, B_MEDIA_NO_TYPE, "Web Player: ", B_GENERIC, 256);
 	serverGroup->MakeTextParameter(
 		P_STREAM_URL, B_MEDIA_NO_TYPE, "Stream URL: ", B_GENERIC, 256);
-
-	if (fParametersChanged) {
-		formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE, "\n", B_GENERIC);
-		formatGroup->MakeNullParameter(0, B_MEDIA_NO_TYPE,
-			"Restart media services to apply changes", B_GENERIC);
-	}
 
 	return web;
 }
@@ -997,6 +1004,15 @@ NetCastNode::GetParameterValue(int32 id, bigtime_t* last_change,
 			return B_OK;
 		}
 
+		case P_STREAM_NAME: {
+			if (*size < static_cast<size_t>(fStreamName.Length() + 1))
+				return B_NO_MEMORY;
+			strcpy(static_cast<char*>(value), fStreamName.String());
+			*size = fStreamName.Length() + 1;
+			*last_change = fLastStreamNameChange;
+			return B_OK;
+		}
+
 		case P_CODEC_TYPE:
 			if (*size < sizeof(int32))
 				return B_NO_MEMORY;
@@ -1013,28 +1029,28 @@ NetCastNode::GetParameterValue(int32 id, bigtime_t* last_change,
 			*last_change = fLastBitrateChange;
 			return B_OK;
 
-		case P_CHUNK_SIZE:
+		case P_OUTPUT_SAMPLE_RATE:
 			if (*size < sizeof(int32))
 				return B_NO_MEMORY;
-			*static_cast<int32*>(value) = fChunkDivider;
+			*static_cast<int32*>(value) = static_cast<int32>(fOutputSampleRate);
 			*size = sizeof(int32);
-			*last_change = fLastChunkSizeChange;
+			*last_change = fLastOutputSampleRateChange;
 			return B_OK;
 
-		case P_SAMPLE_RATE:
+		case P_OUTPUT_CHANNELS:
 			if (*size < sizeof(int32))
 				return B_NO_MEMORY;
-			*static_cast<int32*>(value) = static_cast<int32>(fPreferredSampleRate);
+			*static_cast<int32*>(value) = fOutputChannels;
 			*size = sizeof(int32);
-			*last_change = fLastSampleRateChange;
+			*last_change = fLastOutputChannelsChange;
 			return B_OK;
 
-		case P_CHANNELS:
+		case P_MP3_QUALITY:
 			if (*size < sizeof(int32))
 				return B_NO_MEMORY;
-			*static_cast<int32*>(value) = fPreferredChannels;
+			*static_cast<int32*>(value) = fMP3Quality;
 			*size = sizeof(int32);
-			*last_change = fLastChannelsChange;
+			*last_change = fLastMP3QualityChange;
 			return B_OK;
 
 		case P_SERVER_ENABLE:
@@ -1050,7 +1066,7 @@ NetCastNode::GetParameterValue(int32 id, bigtime_t* last_change,
 			if (fServer.IsRunning()) {
 				url = fServer.GetServerURL();
 			} else {
-				url = "Server is not running";
+				url = "";
 			}
 			if (*size < static_cast<size_t>(url.Length() + 1))
 				return B_NO_MEMORY;
@@ -1064,7 +1080,7 @@ NetCastNode::GetParameterValue(int32 id, bigtime_t* last_change,
 			if (fServer.IsRunning()) {
 				url = fServer.GetStreamURL();
 			} else {
-				url = "Server is not running";
+				url = "";
 			}
 			if (*size < static_cast<size_t>(url.Length() + 1))
 				return B_NO_MEMORY;
@@ -1110,11 +1126,26 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 				if (wasRunning) {
 					TRACE_INFO("Restarting server on new port %ld", newPort);
 					fServer.Start(fServerPort);
-				} else {
-					fParametersChanged = true;
 				}
 
 				needsWebUpdate = true;
+
+				EventQueue()->AddEvent(media_timed_event(when,
+					BTimedEventQueue::B_PARAMETER, NULL,
+					BTimedEventQueue::B_NO_CLEANUP, id, 0, NULL));
+			}
+			break;
+		}
+
+		case P_STREAM_NAME: {
+			const char* newName = static_cast<const char*>(value);
+			if (fStreamName != newName) {
+				TRACE_INFO("Stream name changed: '%s' -> '%s'",
+					fStreamName.String(), newName);
+				fStreamName = newName;
+				fLastStreamNameChange = when;
+
+				fServer.SetStreamName(fStreamName.String());
 
 				EventQueue()->AddEvent(media_timed_event(when,
 					BTimedEventQueue::B_PARAMETER, NULL,
@@ -1127,35 +1158,13 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 			int32 newCodec = *static_cast<const int32*>(value);
 			if (newCodec >= 0 && newCodec < EncoderFactory::GetCodecCount() &&
 				newCodec != static_cast<int32>(fCodecType)) {
-				NetCastEncoder* newEncoder = EncoderFactory::CreateEncoder(
-					static_cast<EncoderFactory::CodecType>(newCodec));
 
-				if (!newEncoder) {
-					TRACE_ERROR("Failed to create encoder type %ld", newCodec);
-					break;
-				}
+				TRACE_INFO("Codec type changed in settings: %d -> %ld (will apply on reconnect)",
+					fCodecType, newCodec);
 
-				TRACE_INFO("Codec changed: %d -> %ld", fCodecType, newCodec);
-
-				fEncoderLock.Lock();
-
-				NetCastEncoder* oldEncoder = fEncoder;
-				fEncoder = newEncoder;
 				fCodecType = static_cast<EncoderFactory::CodecType>(newCodec);
-
-				if (fConnected) {
-					UpdateEncoder();
-				}
-
-				fEncoderLock.Unlock();
-
-				if (oldEncoder) {
-					oldEncoder->Uninit();
-					delete oldEncoder;
-				}
-
 				fLastCodecChange = when;
-				fParametersChanged = true;
+				fEncoderSettingsChanged = true;
 				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
@@ -1168,30 +1177,11 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 		case P_BITRATE: {
 			int32 newBitrate = *static_cast<const int32*>(value);
 			if (newBitrate >= 32 && newBitrate <= 320 && newBitrate != fBitrate) {
-				TRACE_INFO("Bitrate changed: %ld -> %ld", fBitrate, newBitrate);
+				TRACE_INFO("Bitrate changed in settings: %ld -> %ld (will apply on reconnect)",
+					fBitrate, newBitrate);
 				fBitrate = newBitrate;
 				fLastBitrateChange = when;
-				fParametersChanged = true;
-				needsWebUpdate = true;
-
-				if (fConnected) {
-					UpdateEncoder();
-				}
-
-				EventQueue()->AddEvent(media_timed_event(when,
-					BTimedEventQueue::B_PARAMETER, NULL,
-					BTimedEventQueue::B_NO_CLEANUP, id, 0, NULL));
-			}
-			break;
-		}
-
-		case P_CHUNK_SIZE: {
-			int32 newDivider = *static_cast<const int32*>(value);
-			if (newDivider >= 10 && newDivider <= 160 && newDivider != fChunkDivider) {
-				TRACE_INFO("Chunk divider changed: %ld -> %ld", fChunkDivider, newDivider);
-				fChunkDivider = newDivider;
-				fLastChunkSizeChange = when;
-				fParametersChanged = true;
+				fEncoderSettingsChanged = true;
 				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
@@ -1201,13 +1191,14 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 			break;
 		}
 
-		case P_SAMPLE_RATE: {
+		case P_OUTPUT_SAMPLE_RATE: {
 			float newRate = static_cast<float>(*static_cast<const int32*>(value));
-			if (newRate != fPreferredSampleRate) {
-				TRACE_INFO("Sample rate changed: %.0f -> %.0f", fPreferredSampleRate, newRate);
-				fPreferredSampleRate = newRate;
-				fLastSampleRateChange = when;
-				fParametersChanged = true;
+			if (newRate != fOutputSampleRate) {
+				TRACE_INFO("Output sample rate changed in settings: %.0f -> %.0f (will apply on reconnect)",
+					fOutputSampleRate, newRate);
+				fOutputSampleRate = newRate;
+				fLastOutputSampleRateChange = when;
+				fEncoderSettingsChanged = true;
 				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,
@@ -1217,13 +1208,31 @@ NetCastNode::SetParameterValue(int32 id, bigtime_t when,
 			break;
 		}
 
-		case P_CHANNELS: {
+		case P_OUTPUT_CHANNELS: {
 			int32 newChannels = *static_cast<const int32*>(value);
-			if (newChannels >= 1 && newChannels <= 2 && newChannels != fPreferredChannels) {
-				TRACE_INFO("Channels changed: %ld -> %ld", fPreferredChannels, newChannels);
-				fPreferredChannels = newChannels;
-				fLastChannelsChange = when;
-				fParametersChanged = true;
+			if (newChannels >= 1 && newChannels <= 2 && newChannels != fOutputChannels) {
+				TRACE_INFO("Output channels changed in settings: %ld -> %ld (will apply on reconnect)",
+					fOutputChannels, newChannels);
+				fOutputChannels = newChannels;
+				fLastOutputChannelsChange = when;
+				fEncoderSettingsChanged = true;
+				needsWebUpdate = true;
+
+				EventQueue()->AddEvent(media_timed_event(when,
+					BTimedEventQueue::B_PARAMETER, NULL,
+					BTimedEventQueue::B_NO_CLEANUP, id, 0, NULL));
+			}
+			break;
+		}
+
+		case P_MP3_QUALITY: {
+			int32 newQuality = *static_cast<const int32*>(value);
+			if (newQuality >= 0 && newQuality <= 9 && newQuality != fMP3Quality) {
+				TRACE_INFO("MP3 quality changed in settings: %ld -> %ld (will apply on reconnect)",
+					fMP3Quality, newQuality);
+				fMP3Quality = newQuality;
+				fLastMP3QualityChange = when;
+				fEncoderSettingsChanged = true;
 				needsWebUpdate = true;
 
 				EventQueue()->AddEvent(media_timed_event(when,

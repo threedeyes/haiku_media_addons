@@ -72,10 +72,15 @@ resource vector_icon {
 };
 
 resource(1, "player.html") #'FILE' import "Web/player.html";
-resource(2, "netcast.svg") #'FILE' import "Web/netcast.svg";
-resource(3, "media-play.svg") #'FILE' import "Web/media-play.svg";
-resource(4, "media-stop.svg") #'FILE' import "Web/media-stop.svg";
-resource(5, "audio-volume-high.svg") #'FILE' import "Web/audio-volume-high.svg";
-resource(6, "audio-volume-low.svg") #'FILE' import "Web/audio-volume-low.svg";
-resource(7, "audio-volume-medium.svg") #'FILE' import "Web/audio-volume-medium.svg";
-resource(8, "audio-volume-muted.svg") #'FILE' import "Web/audio-volume-muted.svg";
+resource(2, "player.css") #'FILE' import "Web/player.css";
+resource(3, "player.js") #'FILE' import "Web/player.js";
+resource(4, "netcast.svg") #'FILE' import "Web/netcast.svg";
+resource(5, "media-play.svg") #'FILE' import "Web/media-play.svg";
+resource(6, "media-stop.svg") #'FILE' import "Web/media-stop.svg";
+resource(7, "audio-volume-high.svg") #'FILE' import "Web/audio-volume-high.svg";
+resource(8, "audio-volume-low.svg") #'FILE' import "Web/audio-volume-low.svg";
+resource(9, "audio-volume-medium.svg") #'FILE' import "Web/audio-volume-medium.svg";
+resource(10, "audio-volume-muted.svg") #'FILE' import "Web/audio-volume-muted.svg";
+resource(11, "favicon.ico") #'FILE' import "Web/favicon.ico";
+resource(12, "favicon.svg") #'FILE' import "Web/favicon.svg";
+resource(13, "favicon-96x96.png") #'FILE' import "Web/favicon-96x96.png";

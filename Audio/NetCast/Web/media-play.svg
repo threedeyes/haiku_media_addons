@@ -2,21 +2,21 @@
 <svg version="1.1" width="64" height="64" color-interpolation="linearRGB"
      xmlns:svg="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg">
  <g>
-  <path style="fill:none; stroke:#000000; stroke-opacity:0.4; stroke-width:5.145; stroke-linecap:round; stroke-linejoin:round"
-        d="M56.39 34.27C41.65 26.2 26.92 18.13 12.19 10.08C12.19 26.19 12.19 42.32 12.19 58.45C26.92 50.38 41.65 42.32 56.39 34.27V34.27V34.27V34.27V34.27z"
-        transform="matrix(1.0385,0,0,1.0535,-0.2705,-1.2655)"
+  <path style="fill:none; stroke:#000000; stroke-opacity:0.4; stroke-width:5.3816; stroke-linecap:round; stroke-linejoin:round"
+        d="M58.29 34.83C42.98 26.33 27.68 17.83 12.38 9.35C12.38 26.32 12.38 43.31 12.38 60.31C27.68 51.8 42.98 43.31 58.29 34.83V34.83V34.83V34.83V34.83V34.83V34.83z"
+        transform="matrix(1,0,0,1,2,0)"
   />
-  <path style="fill:none; stroke:#005900; stroke-width:5.145; stroke-linecap:round; stroke-linejoin:round"
-        d="M53.79 31.72C39.05 23.65 24.32 15.59 9.59 7.53C9.59 23.64 9.59 39.78 9.59 55.9C24.32 47.83 39.05 39.78 53.79 31.72V31.72V31.72V31.72V31.72z"
-        transform="matrix(1.0385,0,0,1.0535,-0.2705,-1.2655)"
+  <path style="fill:none; stroke:#005900; stroke-width:5.3816; stroke-linecap:round; stroke-linejoin:round"
+        d="M55.59 32.15C40.28 23.64 24.98 15.15 9.68 6.66C9.68 23.63 9.68 40.64 9.68 57.62C24.98 49.12 40.28 40.64 55.59 32.15V32.15V32.15V32.15V32.15V32.15V32.15z"
+        transform="matrix(1,0,0,1,2,0)"
   />
-  <linearGradient id="gradient0" gradientUnits="userSpaceOnUse" x1="170.78" y1="7.52" x2="170.78" y2="55.89">
+  <linearGradient id="gradient0" gradientUnits="userSpaceOnUse" x1="177.08" y1="6.65" x2="177.08" y2="57.61">
    <stop offset="0" stop-color="#80ff80"/>
    <stop offset="1" stop-color="#00b200"/>
   </linearGradient>
   <path style="fill:url(#gradient0)"
-        d="M53.79 31.72C39.05 23.65 24.32 15.59 9.59 7.53C9.59 23.64 9.59 39.78 9.59 55.9C24.32 47.83 39.05 39.78 53.79 31.72V31.72V31.72V31.72V31.72z"
-        transform="matrix(1.0385,0,0,1.0535,-0.2705,-1.2655)"
+        d="M55.59 32.15C40.28 23.64 24.98 15.15 9.68 6.66C9.68 23.63 9.68 40.64 9.68 57.62C24.98 49.12 40.28 40.64 55.59 32.15V32.15V32.15V32.15V32.15V32.15V32.15z"
+        transform="matrix(1,0,0,1,2,0)"
   />
  </g>
 </svg>

@@ -18,7 +18,6 @@ static const int32 kServerMaxClients = 10;
 static const bigtime_t kServerClientTimeout = 5000000;
 static const bigtime_t kServerAcceptTimeout = 1000000;
 static const int32 kServerHTTPBufferSize = 4096;
-static const float kSendBufferSeconds = 2.0f;
 static const int32 kMaxFailedSends = 10;
 
 class NetCastServer {
@@ -59,7 +58,10 @@ public:
 	void					BroadcastData(const uint8* data, size_t size);
 	void					SetStreamInfo(const char* mimeType, int32 bitrate,
 								float sampleRate, int32 channels);
+	void					SetStreamName(const char* name);
 	void					SendHeaderToNewClients(const uint8* header, size_t headerSize);
+	void					SetBufferMultiplier(float multiplier) { fBufferMultiplier = multiplier; }
+	void					ClearClientBuffers();
 
 	BString					GetServerURL() const { return fServerURL; }
 	BString					GetStreamURL() const { return fStreamURL; }
@@ -81,7 +83,6 @@ private:
 	void					CleanupClients();
 	int32					CalculateOptimalSendBuffer() const;
 	BString					LoadHTMLTemplate();
-	BString					ReplaceTemplatePlaceholders(const BString& html);
 	const char*				GetMimeType(const char* filename);
 	bool					AddToClientBuffer(ClientInfo* client, const uint8* data, size_t size);
 	void					FlushClientBuffer(ClientInfo* client, bool& shouldDisconnect);
@@ -91,6 +92,7 @@ private:
 	thread_id				fServerThread;
 	volatile bool			fServerRunning;
 	int32					fServerPort;
+	BString					fStreamName;
 
 	BList					fClients;
 	BLocker					fClientsLock;
@@ -101,6 +103,7 @@ private:
 	int32					fBitrate;
 	float					fSampleRate;
 	int32					fChannels;
+	float					fBufferMultiplier;
 
 	uint8*					fStreamHeader;
 	size_t					fStreamHeaderSize;
